@@ -30,7 +30,7 @@ class VlmConfig:
     """本地 VLM 适配配置（默认对接 Ollama）。"""
 
     endpoint: str = "http://127.0.0.1:11434"
-    model: str = "qwen2.5-vl:3b"
+    model: str = "qwen2.5vl:3b"
 
 
 @dataclass
