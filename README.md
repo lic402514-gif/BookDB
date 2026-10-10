@@ -5,10 +5,11 @@
 > 定位：一个小型、可靠、本地优先的个人图书元数据库。
 > 核心保持简单，复杂能力（CLC 分类、摘要生成等）通过 JSON/CSV 标准接口向外扩展。
 
-## 特性（M1 已完成）
+## 特性（M1 + M2 已完成）
 
 - **图书管理**：`init` / `add` / `list` / `show` / `edit` / `delete`
 - **检索**：关键词 + 作者 / 年份区间 / CLC 前缀 / 文献类型 / 出版社 / 是否有文件
+- **数据交换**：JSON / CSV 导入导出 + 字段级 patch（显式 `mode`、变更预览、NULL 语义）
 - **字段规范化**：版次存纯数字（`第2版`→`2`）、ISBN 去连字符、年份容错
 - **疑似重复检测**：ISBN 优先，无则 书名+作者+年份
 - **文件路径**：绝对路径原样 / 相对路径按 `library_root` 解析
@@ -43,7 +44,26 @@ book search "辩证法" --author "阿多尔诺" --year 1900-2000 --clc B
 # 5. 编辑 / 删除
 book edit 1 --clc "B516"
 book delete 1
+
+# 6. 导出 / 导入
+book export --format json --pretty -o books.json
+book export --format csv  -o books.csv
+book import books.json          # 先预览变更，确认后写入
+book import books.csv  --yes    # CSV 固定 full 语义
 ```
+
+## 导入模式（§9.2）
+
+JSON 顶层需显式声明 `mode`：
+
+```json
+{"mode": "full",  "items": [{"title": "...", "author": "..."}]}
+{"mode": "patch", "items": [{"id": 123, "clc_code": "B0", "abstract": null}]}
+```
+
+- `full`：`id` 命中则更新、否则新增；
+- `patch`：仅修改出现的字段，`null` 清空、缺失保持；
+- 非法字段 / 缺失 `mode` / 未知 `id` → 拒绝导入，不写入任何数据。
 
 ## 配置（book.toml）
 
@@ -70,7 +90,7 @@ model = "qwen2.5-vl:3b"
 | 里程碑 | 内容 | 状态 |
 |---|---|---|
 | M1 | 数据库与 CLI（init/add/list/show/edit/delete/search） | ✅ |
-| M2 | JSON / CSV 导入导出 + 字段级 patch | ⏳ |
+| M2 | JSON / CSV 导入导出 + 字段级 patch（显式 mode、变更预览、NULL 语义） | ✅ |
 | M3 | 文件重命名 + GB/T 7714 引用（共用 `format.py`） | ⏳ |
 | M4 | 本地 VLM 版权页提取（Ollama 适配） | ⏳ |
 | M5 | pywebview GUI | ⏳ |

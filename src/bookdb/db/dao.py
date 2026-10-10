@@ -89,10 +89,16 @@ def get_book(conn: sqlite3.Connection, book_id: int, *, with_abstract: bool = Tr
     return _row_to_dict(row)
 
 
-def list_books(conn: sqlite3.Connection, limit: int | None = None) -> list[dict]:
-    """列表查询 —— 不含 abstract。"""
+def list_books(
+    conn: sqlite3.Connection,
+    limit: int | None = None,
+    *,
+    with_abstract: bool = False,
+) -> list[dict]:
+    """列表查询。默认不含 abstract（§8.3）；导出等需要完整字段时 with_abstract=True。"""
+    cols = schema.DETAIL_COLUMNS if with_abstract else schema.LIST_COLUMNS
     sql = f"""
-        SELECT {schema.LIST_COLUMNS}
+        SELECT {cols}
         FROM books b
         LEFT JOIN publishers p ON p.id = b.publisher_id
         ORDER BY b.id

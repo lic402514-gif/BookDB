@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ..db import dao
 from ..normalize import normalize_edition, normalize_isbn, normalize_year
 from ..paths import to_stored
@@ -28,8 +30,11 @@ class DuplicateBookError(RuntimeError):
 
 
 # ------------------------------------------------------------------ normalize
-def _prepare(payload: dict, ctx: Context) -> dict:
-    """规范化字段；空字符串统一转为 None。"""
+def prepare_fields(payload: dict, library_root: Path | None) -> dict:
+    """规范化字段（add / edit / import 共用）；空字符串统一转为 None。
+
+    只处理「已出现」的键，缺失键不写入结果（供 patch 判断字段是否存在）。
+    """
     out: dict = {}
     for key, value in payload.items():
         if isinstance(value, str):
@@ -43,7 +48,7 @@ def _prepare(payload: dict, ctx: Context) -> dict:
     if "publication_year" in out:
         out["publication_year"] = normalize_year(out["publication_year"])
     if out.get("file_path"):
-        out["file_path"] = to_stored(out["file_path"], ctx.config.library_root)
+        out["file_path"] = to_stored(out["file_path"], library_root)
     if out.get("literature_type"):
         out["literature_type"] = str(out["literature_type"]).strip().upper()
     return out
@@ -61,7 +66,7 @@ def add_book(
     payload 键使用库内字段名（publisher 为名称字符串，非 id）。
     title 必填。发现重复且未 allow_duplicate 时抛 DuplicateBookError。
     """
-    data = _prepare(payload, ctx)
+    data = prepare_fields(payload, ctx.config.library_root)
 
     if not data.get("title"):
         raise ValueError("title（书名）为必填项")
@@ -99,7 +104,7 @@ def update_book(ctx: Context, book_id: int, fields: dict) -> dict:
     if dao.get_book(ctx.conn, book_id, with_abstract=False) is None:
         raise BookNotFoundError(f"未找到 id={book_id} 的图书")
 
-    data = _prepare(fields, ctx)
+    data = prepare_fields(fields, ctx.config.library_root)
     if not data:
         return get_book(ctx, book_id)
 

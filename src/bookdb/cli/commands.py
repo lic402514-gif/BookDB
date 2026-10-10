@@ -16,8 +16,10 @@ from rich.table import Table
 from .. import __version__
 from ..config import CONFIG_FILENAME, Config
 from ..db import database
+from ..normalize import format_edition
 from ..paths import display as display_path
 from ..services import books as book_service
+from ..services import import_export as ie
 from ..services import search as search_service
 from ..services import setup as setup_service
 from ..services.context import Context
@@ -427,3 +429,112 @@ def search(
             err_console.print(f"[red]参数错误：{exc}[/red]")
             raise typer.Exit(code=1)
         _render_table(rows)
+
+
+# ═════════════════════════════════════════════════════════════════ 数据交换 (M2)
+def _fmt(v: object) -> str:
+    return "(空)" if v in (None, "") else str(v)
+
+
+def _render_plan(plan: ie.ImportPlan) -> None:
+    """渲染导入变更预览。"""
+    if plan.inserts:
+        console.print(f"\n[bold green]新增 {len(plan.inserts)} 条：[/bold green]")
+        table = Table(header_style="bold")
+        table.add_column("书名")
+        table.add_column("作者")
+        table.add_column("出版社")
+        for item in plan.inserts:
+            table.add_row(
+                item.get("title") or "",
+                item.get("author") or "",
+                item.get("publisher") or "",
+            )
+        console.print(table)
+
+    if plan.updates:
+        console.print(f"\n[bold cyan]更新 {len(plan.updates)} 条：[/bold cyan]")
+        for upd in plan.updates:
+            before = upd["before"]
+            console.print(f"  #{upd['id']} 《{before.get('title')}》")
+            for key, new in upd["fields"].items():
+                old_key = "publisher_name" if key == "publisher" else key
+                old = before.get(old_key)
+                if key == "edition":
+                    old, new = format_edition(old), format_edition(new)
+                console.print(
+                    f"      {key}: [dim]{_fmt(old)}[/dim] → [cyan]{_fmt(new)}[/cyan]"
+                )
+
+
+@app.command()
+def export(
+    ctx: typer.Context,
+    fmt: str = typer.Option("json", "--format", "-f", help="导出格式：json 或 csv"),
+    output: Path = typer.Option(None, "--output", "-o", help="输出文件；缺省打印到标准输出"),
+    pretty: bool = typer.Option(False, "--pretty", help="JSON 缩进美化"),
+) -> None:
+    """导出全部图书记录（PRD §9 / §11）。"""
+    fmt = fmt.lower()
+    if fmt not in ("json", "csv"):
+        err_console.print(f"[red]不支持的格式：{fmt!r}（仅 json / csv）[/red]")
+        raise typer.Exit(code=1)
+
+    with _open(ctx) as octx:
+        text = ie.export_json(octx, pretty=pretty) if fmt == "json" else ie.export_csv(octx)
+
+    if output:
+        output.write_text(text, encoding="utf-8")
+        console.print(f"[green]✓[/green] 已导出：{output}")
+    else:
+        console.print(text)
+
+
+@app.command("import")
+def import_books(
+    ctx: typer.Context,
+    file: Path = typer.Argument(..., help="要导入的 .json 或 .csv 文件"),
+    mode: str = typer.Option(
+        None, "--mode", "-m",
+        help="json 的导入模式 full|patch（覆盖文件内声明；csv 固定为 full）",
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="跳过预览直接执行"),
+) -> None:
+    """导入图书数据（PRD §9 / §10 / §11），先显示变更预览再确认。"""
+    if not file.exists():
+        err_console.print(f"[red]文件不存在：{file}[/red]")
+        raise typer.Exit(code=1)
+    suffix = file.suffix.lower()
+
+    with _open(ctx) as octx:
+        try:
+            if suffix == ".json":
+                plan = ie.build_json_plan(octx, ie.load_json(file), mode_override=mode)
+            elif suffix == ".csv":
+                plan = ie.build_plan(octx, "full", ie.load_csv(file))
+            else:
+                err_console.print(f"[red]不支持的文件类型：{suffix}（仅 .json / .csv）[/red]")
+                raise typer.Exit(code=1)
+        except ie.ImportValidationError as exc:
+            for e in exc.errors:
+                err_console.print(f"[red]• {e}[/red]")
+            raise typer.Exit(code=1)
+
+        if plan.errors:
+            err_console.print("[red]发现错误，未写入任何数据：[/red]")
+            for e in plan.errors:
+                err_console.print(f"  [red]• {e}[/red]")
+            raise typer.Exit(code=1)
+
+        if plan.total == 0:
+            console.print("[yellow]没有可导入的变更。[/yellow]")
+            raise typer.Exit(code=0)
+
+        _render_plan(plan)
+        if not yes and not typer.confirm(f"确认执行以上 {plan.total} 条变更？", default=False):
+            console.print("[dim]已取消，未写入任何数据。[/dim]")
+            raise typer.Exit(code=0)
+
+        ie.apply_plan(octx, plan)
+
+    console.print(f"[green]✓[/green] 已导入：新增 {len(plan.inserts)}，更新 {len(plan.updates)}")
