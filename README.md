@@ -5,13 +5,14 @@
 > 定位：一个小型、可靠、本地优先的个人图书元数据库。
 > 核心保持简单，复杂能力（CLC 分类、摘要生成等）通过 JSON/CSV 标准接口向外扩展。
 
-## 特性（M1 + M2 + M3 已完成）
+## 特性（M1 + M2 + M3 + M4 已完成）
 
 - **图书管理**：`init` / `add` / `list` / `show` / `edit` / `delete`
 - **检索**：关键词 + 作者 / 年份区间 / CLC 前缀 / 文献类型 / 出版社 / 是否有文件
 - **数据交换**：JSON / CSV 导入导出 + 字段级 patch（显式 `mode`、变更预览、NULL 语义）
 - **文件重命名**：按元数据生成规范化文件名，`--dry-run` 预览 / `--apply` 执行，同步更新库内路径
 - **引用输出**：GB/T 7714-2015 专著（`book cite`）
+- **版权页提取**：本地 VLM（Ollama）从版权页图像提取元数据，人工确认后写入
 - **字段规范化**：版次存纯数字（`第2版`→`2`）、ISBN 去连字符、年份容错
 - **疑似重复检测**：ISBN 优先，无则 书名+作者+年份
 - **文件路径**：绝对路径原样 / 相对路径按 `library_root` 解析
@@ -57,6 +58,11 @@ book import books.csv  --yes    # CSV 固定 full 语义
 book rename 1 --dry-run         # 预览新文件名
 book rename 1 --apply           # 执行（同步更新库内路径）
 book cite 1                     # 输出 GB/T 7714 引用
+
+# 8. 版权页提取（需本机 Ollama + 视觉模型，见下）
+book enrich --pdf "book.pdf"           # 自动定位版权页
+book enrich --pdf "book.pdf" --page 5  # 手动指定页
+book enrich --image "copyright.jpg"    # 手动指定图片
 ```
 
 ## 导入模式（§9.2）
@@ -84,6 +90,22 @@ endpoint = "http://127.0.0.1:11434"
 model = "qwen2.5-vl:3b"
 ```
 
+## 本地模型（M4 版权页提取）
+
+`book enrich` 需要本机运行 **Ollama** + 一个视觉语言模型：
+
+```bash
+# 1. 安装 Ollama —— https://ollama.com/download
+# 2. 启动服务并拉取视觉模型（约 3B）
+ollama serve
+ollama pull qwen2.5-vl:3b
+# 3. 安装 PDF 依赖
+uv pip install -e ".[pdf]"
+```
+
+模型名 / 端点写在 `book.toml` 的 `[vlm]`，不硬编码；换成其他推理框架只需新增一个适配器。
+**模型不可用时 `book enrich` 会明确提示并退出，其余功能不受影响。**
+
 ## 检索年份语法（§8.2）
 
 | 写法 | 含义 |
@@ -99,7 +121,7 @@ model = "qwen2.5-vl:3b"
 | M1 | 数据库与 CLI（init/add/list/show/edit/delete/search） | ✅ |
 | M2 | JSON / CSV 导入导出 + 字段级 patch（显式 mode、变更预览、NULL 语义） | ✅ |
 | M3 | 文件重命名 + GB/T 7714 引用（共用 `format.py`） | ✅ |
-| M4 | 本地 VLM 版权页提取（Ollama 适配） | ⏳ |
+| M4 | 本地 VLM 版权页提取（Ollama 适配） | ✅ |
 | M5 | pywebview GUI | ⏳ |
 
 完整需求见 [`docs/PRD.md`](docs/PRD.md)。

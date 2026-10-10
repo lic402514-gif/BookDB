@@ -16,9 +16,11 @@ from rich.table import Table
 from .. import __version__
 from ..config import CONFIG_FILENAME, Config
 from ..db import database
+from ..llm.base import ModelUnavailableError
 from ..paths import display as display_path
 from ..services import books as book_service
 from ..services import citation as citation_service
+from ..services import enrich as enrich_service
 from ..services import import_export as ie
 from ..services import rename as rename_service
 from ..services import search as search_service
@@ -600,3 +602,92 @@ def cite(ctx: typer.Context, book_id: int = typer.Argument(..., help="图书 id"
             err_console.print(f"[red]{exc}[/red]")
             raise typer.Exit(code=1)
         console.print(text)
+
+
+# ══════════════════════════════════════════════════════════ 版权页提取 (M4)
+def _render_enrich(meta: dict) -> None:
+    """渲染版权页提取结果（新建记录，无旧值）。"""
+    rows = [
+        ("书名", meta.get("title"), None),
+        ("作者", meta.get("author"), None),
+        ("译者", meta.get("translator"), None),
+        ("出版社", meta.get("publisher"), None),
+        ("出版地", meta.get("publication_place"), None),
+        ("出版年份", meta.get("publication_year"), None),
+        ("版次", meta.get("edition"), format_edition),
+        ("ISBN", meta.get("isbn"), None),
+    ]
+    table = Table(header_style="bold")
+    table.add_column("字段")
+    table.add_column("提取值")
+    for label, value, fmt in rows:
+        if fmt:
+            value = fmt(value)
+        table.add_row(label, _fmt(value))
+    console.print(table)
+
+
+@app.command()
+def enrich(
+    ctx: typer.Context,
+    pdf: Path = typer.Option(None, "--pdf", help="PDF 文件（自动定位版权页）"),
+    image: Path = typer.Option(None, "--image", help="版权页图片"),
+    page: int = typer.Option(None, "--page", help="手动指定 PDF 页码（1-based）"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认"),
+) -> None:
+    """从版权页提取元数据（PRD §12）。模型输出须人工确认后才写入数据库。"""
+    if bool(pdf) == bool(image):
+        err_console.print("[red]必须且只能指定 --pdf 或 --image 之一。[/red]")
+        raise typer.Exit(code=1)
+    if page is not None and not pdf:
+        err_console.print("[red]--page 只能与 --pdf 一起使用。[/red]")
+        raise typer.Exit(code=1)
+
+    source = pdf or image
+    if not source.exists():
+        err_console.print(f"[red]文件不存在：{source}[/red]")
+        raise typer.Exit(code=1)
+
+    with _open(ctx) as octx:
+        try:
+            result = (
+                enrich_service.enrich_from_pdf(octx.config, pdf, page)
+                if pdf
+                else enrich_service.enrich_from_image(octx.config, image)
+            )
+        except ModelUnavailableError as exc:
+            err_console.print(
+                f"[yellow]本地模型不可用：[/yellow]\n{exc}\n"
+                "[dim]（模型仅被 enrich 使用，其余功能不受影响）[/dim]"
+            )
+            raise typer.Exit(code=1)
+        except enrich_service.CopyrightPageNotFound as exc:
+            err_console.print(f"[yellow]{exc}[/yellow]")
+            raise typer.Exit(code=1)
+        except (ValueError, RuntimeError) as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1)
+
+        where = source.name + (f" 第 {result.page} 页" if result.page else "")
+        console.print(f"[dim]来源：{where}（{result.source}）[/dim]")
+        _render_enrich(result.metadata)
+
+        if not yes and not typer.confirm("确认写入数据库？", default=False):
+            console.print("[dim]已取消，未写入。[/dim]")
+            raise typer.Exit(code=0)
+
+        try:
+            book_id = book_service.add_book(octx, result.metadata)
+        except book_service.DuplicateBookError as exc:
+            err_console.print(f"[yellow]⚠ 发现 {len(exc.existing)} 条疑似重复：[/yellow]")
+            _render_table(exc.existing)
+            if not typer.confirm("仍然写入？", default=False):
+                console.print("[dim]已取消。[/dim]")
+                raise typer.Exit(code=0)
+            book_id = book_service.add_book(octx, result.metadata, allow_duplicate=True)
+        except ValueError as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1)
+
+    title = result.metadata.get("title") or "（无书名）"
+    console.print(f"[green]✓[/green] 已写入：#{book_id} 《{title}》")
