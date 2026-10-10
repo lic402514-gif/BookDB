@@ -16,13 +16,15 @@ from rich.table import Table
 from .. import __version__
 from ..config import CONFIG_FILENAME, Config
 from ..db import database
-from ..normalize import format_edition
 from ..paths import display as display_path
 from ..services import books as book_service
+from ..services import citation as citation_service
 from ..services import import_export as ie
+from ..services import rename as rename_service
 from ..services import search as search_service
 from ..services import setup as setup_service
 from ..services.context import Context
+from ..services.format import format_edition
 
 app = typer.Typer(
     name="book",
@@ -86,8 +88,6 @@ def _render_table(rows: list[dict]) -> None:
 
 def _render_detail(book: dict, library_root: Path | None = None) -> None:
     """详情呈现：字段缺失显示为 —，含 abstract。"""
-    from ..normalize import format_edition
-
     def val(key: str, fmt=None) -> str:
         v = book.get(key)
         if v in (None, ""):
@@ -538,3 +538,65 @@ def import_books(
         ie.apply_plan(octx, plan)
 
     console.print(f"[green]✓[/green] 已导入：新增 {len(plan.inserts)}，更新 {len(plan.updates)}")
+
+
+# ═══════════════════════════════════════════════════════════ 文件与引用 (M3)
+@app.command()
+def rename(
+    ctx: typer.Context,
+    book_id: int = typer.Argument(..., help="图书 id"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="仅预览，不改动文件（默认行为）"),
+    apply: bool = typer.Option(False, "--apply", help="执行重命名"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认"),
+    force: bool = typer.Option(False, "--force", help="目标文件已存在时覆盖"),
+) -> None:
+    """按元数据生成规范化文件名（PRD §14）。"""
+    if dry_run and apply:
+        err_console.print("[red]--dry-run 与 --apply 不能同时使用。[/red]")
+        raise typer.Exit(code=1)
+
+    with _open(ctx) as octx:
+        try:
+            plan = rename_service.build_plan(octx, book_id)
+        except book_service.BookNotFoundError as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1)
+        except rename_service.NoFileError as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1)
+
+        console.print(f"旧  {plan.old_name}")
+        console.print(f" ↓")
+        console.print(f"新  [cyan]{plan.new_name}[/cyan]")
+
+        if not plan.changed:
+            console.print("[yellow]已是规范文件名，无需改动。[/yellow]")
+            raise typer.Exit(code=0)
+
+        if not apply:
+            console.print("[dim]（--dry-run：未改动文件。确认无误后加 --apply 执行）[/dim]")
+            raise typer.Exit(code=0)
+
+        if not yes and not typer.confirm("确认重命名？", default=False):
+            console.print("[dim]已取消。[/dim]")
+            raise typer.Exit(code=0)
+
+        try:
+            rename_service.apply_plan(octx, plan, overwrite=force)
+        except (FileNotFoundError, rename_service.TargetExistsError) as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1)
+
+        console.print(f"[green]✓[/green] 已重命名：{plan.new_name}")
+
+
+@app.command()
+def cite(ctx: typer.Context, book_id: int = typer.Argument(..., help="图书 id")) -> None:
+    """输出 GB/T 7714-2015 引用（PRD §15）。"""
+    with _open(ctx) as octx:
+        try:
+            text = citation_service.cite(octx, book_id)
+        except book_service.BookNotFoundError as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1)
+        console.print(text)

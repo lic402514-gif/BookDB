@@ -16,12 +16,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from bookdb.config import Config  # noqa: E402
 from bookdb.db import database  # noqa: E402
 from bookdb.normalize import (  # noqa: E402
-    format_edition,
     normalize_edition,
     normalize_isbn,
     parse_year_range,
 )
 from bookdb.paths import resolve, to_stored  # noqa: E402
+from bookdb.services.format import format_edition  # noqa: E402
 from bookdb.services import books as book_service  # noqa: E402
 from bookdb.services import search as search_service  # noqa: E402
 from bookdb.services.context import Context  # noqa: E402

@@ -5,11 +5,13 @@
 > 定位：一个小型、可靠、本地优先的个人图书元数据库。
 > 核心保持简单，复杂能力（CLC 分类、摘要生成等）通过 JSON/CSV 标准接口向外扩展。
 
-## 特性（M1 + M2 已完成）
+## 特性（M1 + M2 + M3 已完成）
 
 - **图书管理**：`init` / `add` / `list` / `show` / `edit` / `delete`
 - **检索**：关键词 + 作者 / 年份区间 / CLC 前缀 / 文献类型 / 出版社 / 是否有文件
 - **数据交换**：JSON / CSV 导入导出 + 字段级 patch（显式 `mode`、变更预览、NULL 语义）
+- **文件重命名**：按元数据生成规范化文件名，`--dry-run` 预览 / `--apply` 执行，同步更新库内路径
+- **引用输出**：GB/T 7714-2015 专著（`book cite`）
 - **字段规范化**：版次存纯数字（`第2版`→`2`）、ISBN 去连字符、年份容错
 - **疑似重复检测**：ISBN 优先，无则 书名+作者+年份
 - **文件路径**：绝对路径原样 / 相对路径按 `library_root` 解析
@@ -50,6 +52,11 @@ book export --format json --pretty -o books.json
 book export --format csv  -o books.csv
 book import books.json          # 先预览变更，确认后写入
 book import books.csv  --yes    # CSV 固定 full 语义
+
+# 7. 重命名 / 引用
+book rename 1 --dry-run         # 预览新文件名
+book rename 1 --apply           # 执行（同步更新库内路径）
+book cite 1                     # 输出 GB/T 7714 引用
 ```
 
 ## 导入模式（§9.2）
@@ -91,7 +98,7 @@ model = "qwen2.5-vl:3b"
 |---|---|---|
 | M1 | 数据库与 CLI（init/add/list/show/edit/delete/search） | ✅ |
 | M2 | JSON / CSV 导入导出 + 字段级 patch（显式 mode、变更预览、NULL 语义） | ✅ |
-| M3 | 文件重命名 + GB/T 7714 引用（共用 `format.py`） | ⏳ |
+| M3 | 文件重命名 + GB/T 7714 引用（共用 `format.py`） | ✅ |
 | M4 | 本地 VLM 版权页提取（Ollama 适配） | ⏳ |
 | M5 | pywebview GUI | ⏳ |
 

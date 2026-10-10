@@ -50,16 +50,6 @@ def normalize_edition(raw: object | None) -> str | None:
     return text
 
 
-def format_edition(value: str | None) -> str | None:
-    """呈现层：纯数字 → 「第N版」；无法识别则原样返回。"""
-    if not value:
-        return None
-    text = str(value).strip()
-    if text.isdigit():
-        return f"第{text}版"
-    return text
-
-
 # ---------------------------------------------------------------------- isbn
 def normalize_isbn(raw: object | None) -> str | None:
     """去除 ISBN 中的连字符与空格（见 §23.1）。"""
