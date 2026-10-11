@@ -109,6 +109,25 @@ def test_path_strips_surrounding_quotes(tmp_path: Path):
     assert resolve(f'"{raw}"', root) == (root / "a.pdf").resolve()
 
 
+def test_path_strips_cjk_quotes_and_invisible_chars(tmp_path: Path):
+    """中文引号 “…”（左右不同字符）与零宽字符 → 无损去除，绝不叠加。"""
+    root = tmp_path / "lib"
+    root.mkdir()
+    raw = str(root / "a.pdf")
+    for wrapped in (f"“{raw}”", f"‘{raw}’", f"\u200b{raw}", f"\ufeff{raw}"):
+        assert to_stored(wrapped, root) == "a.pdf", wrapped
+        assert resolve(wrapped, root) == (root / "a.pdf").resolve(), wrapped
+
+
+def test_path_rejects_fullwidth_separators(tmp_path: Path):
+    """全角分隔符 ＼ ／ → 明确报错（否则静默存成错误路径）。"""
+    root = tmp_path / "lib"
+    root.mkdir()
+    for bad in ("E:＼Books＼x.pdf", "E:/Books／x.pdf"):
+        with pytest.raises(PathSyntaxError):
+            to_stored(bad, root)
+
+
 def test_path_rejects_fullwidth_colon(tmp_path: Path):
     """盘符用全角冒号（中文输入法）→ 明确报错，绝不静默拼接成 E:\\Books\\E:\\...。"""
     root = tmp_path / "lib"

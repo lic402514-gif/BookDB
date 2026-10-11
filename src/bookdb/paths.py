@@ -30,25 +30,39 @@ class PathSyntaxError(ValueError):
 #: 形如「E:」「E：」的盘符前缀（半角 / 全角冒号）
 _DRIVE_PREFIX = re.compile(r"^([A-Za-z])([:：])")
 
+#: 不可见字符（零宽空格/连字/方向符、BOM）—— 复制粘贴常见，路径里无意义
+_INVISIBLE = re.compile(r"[\u200b\u200c\u200d\u200e\u200f\ufeff]")
+
+#: 成对引号（左 → 右）；中英文都要覆盖，否则会被误判为相对路径
+_QUOTE_PAIRS = {'"': '"', "'": "'", "“": "”", "‘": "’", "「": "」", "『": "』"}
+
+#: 全角路径分隔符
+_FULLWIDTH_SEPS = ("＼", "／")
+
 
 def _clean(raw: object) -> str:
-    """去掉首尾空白与**成对引号**。
+    """路径输入的无损规范化：去不可见字符 + 首尾空白 + 成对引号。
 
-    资源管理器「复制路径」会产出 `"E:\\Books\\x.pdf"`；这类引号会让
-    `is_absolute()` 误判为相对路径，进而拼出叠加路径。
+    资源管理器「复制路径」产出 `"E:\\Books\\x.pdf"`；中文环境还可能带上
+    `“E:\\Books\\x.pdf”`。这些会让 `is_absolute()` 误判为相对路径，
+    进而拼出 `E:\\Books\\E:\\Books\\x.pdf` 这种叠加路径。
     """
-    s = str(raw).strip()
-    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'“”":
+    s = _INVISIBLE.sub("", str(raw)).strip()
+    closer = _QUOTE_PAIRS.get(s[:1])
+    if closer and len(s) >= 2 and s.endswith(closer):
         s = s[1:-1].strip()
     return s
 
 
 def check_syntax(raw: str) -> None:
-    """用户输入的路径语法检查。
-
-    盘符用了全角冒号（中文输入法常见）→ 直接报错并给出正确写法，
-    而不是把它当成相对路径去拼接。
-    """
+    """用户输入的路径语法检查：可疑但不是合法绝对路径 → 明确报错，不静默拼接。"""
+    for sep in _FULLWIDTH_SEPS:
+        if sep in raw:
+            half = "\\" if sep == "＼" else "/"
+            raise PathSyntaxError(
+                f"路径含全角分隔符 {sep!r}（中文输入法常见），"
+                f"应改为半角 {half!r}：{raw}"
+            )
     m = _DRIVE_PREFIX.match(raw)
     if m and m.group(2) == "：":
         fixed = f"{m.group(1)}:{raw[2:]}"
