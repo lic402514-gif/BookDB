@@ -27,8 +27,14 @@ class PathSyntaxError(ValueError):
     """路径语法非法（典型：用中文全角冒号写盘符）。"""
 
 
-#: 形如「E:」「E：」的盘符前缀（半角 / 全角冒号）
-_DRIVE_PREFIX = re.compile(r"^([A-Za-z])([:：])")
+#: 盘符前缀：字母（半角 / 全角）+ 冒号（半角 / 全角）
+_DRIVE_PREFIX = re.compile(r"^([A-Za-zＡ-Ｚａ-ｚ])([:：])")
+
+
+def _ascii_letter(ch: str) -> str:
+    """全角字母 → 半角（只用于给出修正示例）。"""
+    return chr(ord(ch) - 0xFEE0) if ord(ch) > 0x7F else ch
+
 
 #: 不可见字符（零宽空格/连字/方向符、BOM）—— 复制粘贴常见，路径里无意义
 _INVISIBLE = re.compile(r"[\u200b\u200c\u200d\u200e\u200f\ufeff]")
@@ -64,11 +70,12 @@ def check_syntax(raw: str) -> None:
                 f"应改为半角 {half!r}：{raw}"
             )
     m = _DRIVE_PREFIX.match(raw)
-    if m and m.group(2) == "：":
-        fixed = f"{m.group(1)}:{raw[2:]}"
+    if m and (m.group(2) == "：" or not m.group(1).isascii()):
+        bad = m.group(1) + m.group(2)
+        fixed = f"{_ascii_letter(m.group(1))}:{raw[2:]}"
         raise PathSyntaxError(
-            f"路径 {raw!r} 的冒号是全角「：」（中文输入法常见），"
-            f"应为半角「:」，例如：{fixed}"
+            f"盘符 {bad!r} 含全角字符「{m.group(1)}」或「{m.group(2)}」"
+            f"（中文输入法全角模式常见），应为半角，例如：{fixed}"
         )
 
 

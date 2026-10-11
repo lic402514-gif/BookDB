@@ -140,6 +140,15 @@ def test_path_rejects_fullwidth_colon(tmp_path: Path):
         resolve(bad, root)
 
 
+def test_path_rejects_fullwidth_drive_letter(tmp_path: Path):
+    """全角字母盘符（Ｅ：，输入法全角模式）→ 报错，不叠加。"""
+    root = tmp_path / "lib"
+    root.mkdir()
+    for bad in ("Ｅ：\\Books\\x.pdf", "Ｅ:\\Books\\x.pdf", "ｅ：\\Books\\x.pdf"):
+        with pytest.raises(PathSyntaxError):
+            to_stored(bad, root)
+
+
 def test_path_never_doubles_prefix(tmp_path: Path):
     """回归：任何输入都不应产出「库根 + 绝对路径」的叠加路径。"""
     root = tmp_path / "lib"
