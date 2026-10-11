@@ -1117,6 +1117,8 @@ DELETE /api/books/{id}               删除
 GET    /api/search                   检索（q/author/year/clc/type/publisher/has_file）
 GET    /api/export?format=json|csv   导出（返回文本内容）
 GET    /api/cite/{id}                引用
+POST   /api/open/{id}                用系统默认程序打开关联文件
+POST   /api/reveal/{id}              在文件管理器中定位关联文件
 POST   /api/import/preview           导入预览（返回变更计划）
 POST   /api/import/apply             导入执行
 GET    /api/rename/{id}              重命名预览

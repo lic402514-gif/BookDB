@@ -109,6 +109,7 @@ function blankDetail() {
   FIELDS.forEach(n => { form.elements[n].value = ''; });
   $('#detail-meta').textContent = '';
   highlightRow(-1);
+  syncFileButtons();
   form.elements.title.focus();
 }
 
@@ -127,6 +128,7 @@ async function selectBook(id) {
   });
   $('#detail-meta').textContent = `创建 ${book.created_at || '-'} · 更新 ${book.updated_at || '-'}`;
   highlightRow(id);
+  syncFileButtons();
 }
 
 function collectForm() {
@@ -236,6 +238,26 @@ async function applyRename(id) {
     toast(err.message, true);
   }
 }
+
+/* ══════════════════════════════════════════════════════ 打开文件（系统默认程序） */
+function syncFileButtons() {
+  const hasFile = !!(state.current && state.current.file_path);
+  $('#btn-open').disabled = !hasFile;
+  $('#btn-reveal').disabled = !hasFile;
+  $('#btn-open').title = hasFile ? '用系统默认程序打开该文件' : '该记录未关联文件';
+  $('#btn-reveal').title = hasFile ? '在文件管理器中定位该文件' : '该记录未关联文件';
+}
+
+async function openAction(kind, okMsg) {
+  if (!state.current) return;
+  try {
+    await api(`/api/${kind}/${state.current.id}`, { method: 'POST', body: {} });
+    toast(okMsg);
+  } catch (err) { toast(err.message, true); }
+}
+
+const openFile   = () => openAction('open', '已用系统默认程序打开');
+const revealFile = () => openAction('reveal', '已在文件夹中定位');
 
 function copyText(text) {
   const done = () => toast('已复制到剪贴板');
@@ -437,6 +459,8 @@ function bind() {
   $('#btn-enrich').onclick = doEnrich;
   $('#btn-cite').onclick = showCite;
   $('#btn-rename').onclick = showRename;
+  $('#btn-open').onclick = openFile;
+  $('#btn-reveal').onclick = revealFile;
   $('#btn-delete').onclick = deleteBook;
   $('#btn-clear').onclick = clearFilters;
   $('#detail-form').onsubmit = saveBook;

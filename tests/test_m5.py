@@ -300,3 +300,58 @@ def test_unknown_api_404(api):
 def test_wrong_method_405(api):
     status, _ = api.call("DELETE", "/api/books")
     assert status == 405
+
+
+# ─────────────────────────────────────────────────── 打开文件（系统默认程序）
+def test_open_file(api, monkeypatch):
+    from bookdb.gui import server as gui_server
+
+    (api.tmp / "lib" / "book.pdf").write_bytes(b"%PDF-1.4 dummy")
+    book_id = add(api, file_path="book.pdf")
+
+    calls = []
+    monkeypatch.setattr(gui_server, "launch", lambda p: calls.append(p))
+
+    status, payload = api.call("POST", f"/api/open/{book_id}", {})
+    assert status == 200 and payload["ok"]
+    assert len(calls) == 1 and calls[0].name == "book.pdf"
+
+
+def test_open_file_without_attachment_409(api, monkeypatch):
+    from bookdb.gui import server as gui_server
+
+    monkeypatch.setattr(gui_server, "launch", lambda p: None)
+    book_id = add(api)                                  # 无 file_path
+    status, payload = api.call("POST", f"/api/open/{book_id}", {})
+    assert status == 409 and "未关联文件" in payload["error"]
+
+
+def test_open_file_missing_on_disk_404(api, monkeypatch):
+    from bookdb.gui import server as gui_server
+
+    monkeypatch.setattr(gui_server, "launch", lambda p: None)
+    book_id = add(api, file_path="nope.pdf")            # 记录有路径，磁盘没有
+    status, payload = api.call("POST", f"/api/open/{book_id}", {})
+    assert status == 404 and "文件不存在" in payload["error"]
+
+
+def test_open_file_unknown_id_404(api, monkeypatch):
+    from bookdb.gui import server as gui_server
+
+    monkeypatch.setattr(gui_server, "launch", lambda p: None)
+    status, _ = api.call("POST", "/api/open/999", {})
+    assert status == 404
+
+
+def test_reveal_file(api, monkeypatch):
+    from bookdb.gui import server as gui_server
+
+    (api.tmp / "lib" / "book.pdf").write_bytes(b"%PDF-1.4 dummy")
+    book_id = add(api, file_path="book.pdf")
+
+    calls = []
+    monkeypatch.setattr(gui_server, "reveal", lambda p: calls.append(p))
+
+    status, payload = api.call("POST", f"/api/reveal/{book_id}", {})
+    assert status == 200 and payload["ok"]
+    assert len(calls) == 1 and calls[0].name == "book.pdf"

@@ -14,12 +14,17 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
 import re
+import subprocess
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from ..config import Config
+from ..paths import LibraryRootMissingError
+from ..paths import resolve as resolve_path
 from ..services import books as book_service
 from ..services import citation as citation_service
 from ..services import enrich as enrich_service
@@ -139,6 +144,68 @@ def _h_cite(config: Config, match, query, body) -> dict:
         except book_service.BookNotFoundError as exc:
             raise ApiError(str(exc), 404) from exc
     return {"citation": text}
+
+
+# ─────────────────────────────────────────────────── 打开文件（系统默认程序）
+def launch(path: Path) -> None:
+    """用系统默认程序打开文件（Windows / macOS / Linux 兜底）。
+
+    独立成模块级函数，便于测试时替换（避免真的弹出外部程序）。
+    """
+    if hasattr(os, "startfile"):                       # Windows：等价于双击
+        os.startfile(str(path))                        # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path)])
+
+
+def reveal(path: Path) -> None:
+    """在文件管理器中定位到该文件。"""
+    if hasattr(os, "startfile"):                       # Windows：打开并选中
+        subprocess.Popen(["explorer", "/select,", str(path)])
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", "-R", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path.parent)])
+
+
+def _resolve_book_file(config: Config, book_id: int) -> Path:
+    """取图书记录关联的文件路径并校验存在性。"""
+    with Context.open(config) as ctx:
+        try:
+            book = book_service.get_book(ctx, book_id)
+        except book_service.BookNotFoundError as exc:
+            raise ApiError(str(exc), 404) from exc
+
+    stored = book.get("file_path")
+    if not stored:
+        raise ApiError("该记录未关联文件", 409)
+    try:
+        path = resolve_path(stored, config.library_root)
+    except LibraryRootMissingError as exc:
+        raise ApiError(str(exc), 409) from exc
+    if path is None or not path.exists():
+        raise ApiError(f"文件不存在：{path}", 404)
+    return path
+
+
+def _h_open_file(config: Config, match, query, body) -> dict:
+    path = _resolve_book_file(config, int(match.group("id")))
+    try:
+        launch(path)
+    except OSError as exc:
+        raise ApiError(f"无法打开文件：{exc}", 500) from exc
+    return {"ok": True, "path": str(path)}
+
+
+def _h_open_folder(config: Config, match, query, body) -> dict:
+    path = _resolve_book_file(config, int(match.group("id")))
+    try:
+        reveal(path)
+    except OSError as exc:
+        raise ApiError(f"无法打开文件夹：{exc}", 500) from exc
+    return {"ok": True, "path": str(path)}
 
 
 # ─────────────────────────────────────────────────────────── 导入（预览 / 执行）
@@ -266,6 +333,8 @@ ROUTES = [
     ("GET", r"^/api/search$", _h_search),
     ("GET", r"^/api/export$", _h_export),
     ("GET", r"^/api/cite/(?P<id>\d+)$", _h_cite),
+    ("POST", r"^/api/open/(?P<id>\d+)$", _h_open_file),
+    ("POST", r"^/api/reveal/(?P<id>\d+)$", _h_open_folder),
     ("POST", r"^/api/import/preview$", _h_import_preview),
     ("POST", r"^/api/import/apply$", _h_import_apply),
     ("GET", r"^/api/rename/(?P<id>\d+)$", _h_rename_preview),

@@ -56,6 +56,8 @@ button.primary:hover { filter: brightness(1.08); }
 button.danger { color: var(--danger); border-color: #f0d5d2; }
 button.danger:hover { background: #fdecea; border-color: var(--danger); }
 button.ghost { background: transparent; }
+button:disabled { opacity: .4; cursor: not-allowed; }
+button:disabled:hover { background: var(--panel); border-color: var(--line); }
 
 /* ─────────────────────────────────────────── 高级筛选 */
 .filters {
