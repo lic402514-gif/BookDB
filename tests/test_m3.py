@@ -96,7 +96,16 @@ def test_format_citation_with_edition():
     book = {"author": "阿多尔诺", "title": "否定辩证法", "publisher_name": "商务印书馆",
             "publication_place": "北京", "publication_year": 2019, "edition": "2",
             "literature_type": "M"}
-    assert format_citation(book) == "阿多尔诺. 否定辩证法[M]. 第2版. 北京: 商务印书馆, 2019."
+    # 国标：非第1版写作「2版」（无「第」字）
+    assert format_citation(book) == "阿多尔诺. 否定辩证法[M]. 2版. 北京: 商务印书馆, 2019."
+
+
+def test_format_citation_first_edition_omitted():
+    # 国标：第 1 版不著录（整段省略）
+    book = {"author": "阿多尔诺", "title": "否定辩证法", "publisher_name": "商务印书馆",
+            "publication_place": "北京", "publication_year": 2019, "edition": "1",
+            "literature_type": "M"}
+    assert format_citation(book) == "阿多尔诺. 否定辩证法[M]. 北京: 商务印书馆, 2019."
 
 
 # ──────────────────────────────────────────────────────────────── rename 服务

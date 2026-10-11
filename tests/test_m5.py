@@ -184,11 +184,19 @@ def test_export_json_and_csv(api):
 
 # ─────────────────────────────────────────────────────────────── 引用
 def test_cite(api):
-    book_id = add(api)
+    book_id = add(api)                     # SAMPLE 的 edition="第1版" → 规范化为 "1"
     status, payload = api.call("GET", f"/api/cite/{book_id}")
     assert status == 200
-    # 版本项 = 第N版（PRD §15「引用细节（定稿）」）
-    assert payload["citation"] == "阿多尔诺. 否定辩证法[M]. 王凤才, 译. 第1版. 北京: 商务印书馆, 2019."
+    # 国标：第 1 版不著录（PRD §15 定稿）
+    assert payload["citation"] == "阿多尔诺. 否定辩证法[M]. 王凤才, 译. 北京: 商务印书馆, 2019."
+
+
+def test_cite_non_first_edition(api):
+    book_id = add(api, edition="2")
+    status, payload = api.call("GET", f"/api/cite/{book_id}")
+    assert status == 200
+    # 国标：非第1版写作「2版」
+    assert payload["citation"] == "阿多尔诺. 否定辩证法[M]. 王凤才, 译. 2版. 北京: 商务印书馆, 2019."
 
 
 def test_cite_without_edition(api):

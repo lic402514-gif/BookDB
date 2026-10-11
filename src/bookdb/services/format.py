@@ -3,12 +3,12 @@
 统一负责（§14「与引用共用格式化模块」定稿）：
   - 字段缺省策略（为空时省略）
   - 作者、译者的多值拼接
-  - 版次的「第N版」格式化（库内存纯数字，见 §5.1）
+  - 版次格式化：界面用「第N版」；GB/T 7714 用「N版」且第1版不著录（§15）
   - 文件名非法字符清理、长度截断
 
 两套模板：
-  - `build_filename()`  —— PDF 文件命名（§14.1）
-  - `format_citation()` —— GB/T 7714-2015 专著（§15）
+  - `build_filename()`  —— PDF 文件命名（§14.1，版次写作 `(N)`）
+  - `format_citation()` —— GB/T 7714-2015 专著（§15，版次按国标）
 
 RenameService / CitationService 只调用本模块，缺省规则只存在这里一处。
 """
@@ -29,11 +29,27 @@ _MULTI_SEP = re.compile(r"[；;、]+")
 
 # ────────────────────────────────────────────────────────────── 基础呈现
 def format_edition(value: object | None) -> str | None:
-    """纯数字 → 「第N版」；无法识别则原样返回；空 → None。"""
+    """通用呈现：纯数字 → 「第N版」；无法识别则原样返回；空 → None。
+
+    用于界面显示（如 `book show`）。
+    """
     if not value:
         return None
     text = str(value).strip()
     return f"第{text}版" if text.isdigit() else text
+
+
+def gb7714_edition(value: object | None) -> str | None:
+    """GB/T 7714-2015 版本项（§15 定稿）。
+
+    规则（国标）：**第 1 版不著录**；其余写作「N版」（无「第」字）。
+    """
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text or text == "1":
+        return None
+    return f"{text}版" if text.isdigit() else text
 
 
 def split_multi(text: object | None) -> list[str]:
@@ -117,6 +133,8 @@ def format_citation(book: dict) -> str:
 
     模板：主要责任者. 题名[文献类型]. 其他责任者. 版本项. 出版地: 出版者, 出版年.
     示例：阿多尔诺. 否定辩证法[M]. 王凤才, 译. 北京: 商务印书馆, 2019.
+
+    版本项按国标：第 1 版不著录，其余写作「N版」（见 `gb7714_edition`）。
     """
     segments: list[str] = []
 
@@ -132,7 +150,7 @@ def format_citation(book: dict) -> str:
     if translator:
         segments.append(f"{translator}, 译")
 
-    edition = format_edition(book.get("edition"))
+    edition = gb7714_edition(book.get("edition"))
     if edition:
         segments.append(edition)
 
