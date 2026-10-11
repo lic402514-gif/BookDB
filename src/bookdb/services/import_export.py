@@ -104,32 +104,41 @@ def export_csv(ctx: Context) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════ 导入
-def load_json(path: Path) -> dict:
+def parse_json_text(text: str) -> object:
+    """解析 JSON 文本（CLI 读文件 / GUI 收文本共用）。"""
     try:
-        with path.open("r", encoding="utf-8") as fh:
-            return json.load(fh)
+        return json.loads(text)
     except json.JSONDecodeError as exc:
         raise ImportValidationError([f"JSON 解析失败：{exc}"]) from exc
+
+
+def parse_csv_text(text: str) -> list[dict]:
+    """解析 CSV 文本（CLI 读文件 / GUI 收文本共用）。"""
+    reader = csv.DictReader(io.StringIO(text))
+    if reader.fieldnames is None:
+        raise ImportValidationError(["CSV 为空或缺少表头"])
+    unknown = [c for c in reader.fieldnames if c not in IMPORT_KEYS]
+    if unknown:
+        raise ImportValidationError(
+            [f"CSV 存在未知列：{unknown}（允许：{sorted(IMPORT_KEYS)}）"]
+        )
+    return [dict(r) for r in reader]
+
+
+def load_json(path: Path) -> object:
+    try:
+        text = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise ImportValidationError([f"读取文件失败：{exc}"]) from exc
+    return parse_json_text(text)
 
 
 def load_csv(path: Path) -> list[dict]:
     try:
-        with path.open("r", encoding="utf-8-sig", newline="") as fh:
-            reader = csv.DictReader(fh)
-            if reader.fieldnames is None:
-                raise ImportValidationError(["CSV 为空或缺少表头"])
-            unknown = [c for c in reader.fieldnames if c not in IMPORT_KEYS]
-            if unknown:
-                raise ImportValidationError(
-                    [f"CSV 存在未知列：{unknown}（允许：{sorted(IMPORT_KEYS)}）"]
-                )
-            return [dict(r) for r in reader]
-    except ImportValidationError:
-        raise
+        text = path.read_text(encoding="utf-8-sig")
     except OSError as exc:
         raise ImportValidationError([f"读取文件失败：{exc}"]) from exc
+    return parse_csv_text(text)
 
 
 def _parse_mode(data: dict, mode_override: str | None) -> str:

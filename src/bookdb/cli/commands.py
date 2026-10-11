@@ -1,6 +1,6 @@
 """CLI 命令（PRD §21）。
 
-P0：init / add / list / show / edit / delete / search
+P1：rename / cite / enrich / gui
 CLI 只负责参数解析、交互与呈现；业务逻辑一律走 services 层（PRD §17）。
 """
 
@@ -691,3 +691,24 @@ def enrich(
 
     title = result.metadata.get("title") or "（无书名）"
     console.print(f"[green]✓[/green] 已写入：#{book_id} 《{title}》")
+
+
+# ══════════════════════════════════════════════════════════════ GUI (M5)
+@app.command()
+def gui(ctx: typer.Context) -> None:
+    """启动桌面 GUI（PRD §16）—— pywebview + 内部 HTTP 端点，不对外暴露。"""
+    config = _load_config(ctx)
+    if not database.database_exists(config.db_path):
+        err_console.print(
+            f"[red]数据库不存在：[/red]{config.db_path}\n"
+            f"请先运行 [bold]book init[/bold] 初始化。"
+        )
+        raise typer.Exit(code=1)
+
+    from ..gui.app import run  # 懒加载：避免无 pywebview 时影响其它命令
+
+    try:
+        run(config)
+    except RuntimeError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)

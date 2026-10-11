@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bookdb — 图书元数据</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">📚 <span>bookdb</span></div>
+
+  <div class="search">
+    <input id="q" type="search" placeholder="搜索：书名 / 作者 / 译者 / 出版社 / ISBN / CLC / 摘要（回车）" autocomplete="off">
+    <button id="btn-adv" class="ghost" title="高级筛选">⚙</button>
+  </div>
+
+  <div class="actions">
+    <button id="btn-new"    class="primary">＋ 添加</button>
+    <button id="btn-import" class="ghost">📥 导入</button>
+    <button id="btn-export" class="ghost">📤 导出</button>
+    <button id="btn-enrich" class="ghost">🔍 版权页提取</button>
+  </div>
+</header>
+
+<div id="filters" class="filters hidden">
+  <label>作者<input id="f-author" type="text"></label>
+  <label>年份<input id="f-year" type="text" placeholder="2019 | 1800-1900 | 1800-"></label>
+  <label>CLC<input id="f-clc" type="text" placeholder="前缀"></label>
+  <label>出版社<input id="f-publisher" type="text"></label>
+  <label>类型<input id="f-type" type="text" placeholder="M"></label>
+  <label class="check"><input id="f-hasfile" type="checkbox"> 仅有文件</label>
+  <button id="btn-clear" class="ghost">清除</button>
+</div>
+
+<main>
+  <section class="list-pane">
+    <div class="pane-head">
+      <span id="list-count" class="muted">—</span>
+      <span id="lib-root" class="muted"></span>
+    </div>
+    <div class="table-wrap">
+      <table id="book-table">
+        <thead>
+          <tr><th>ID</th><th>书名</th><th>作者</th><th>出版社</th><th>年份</th><th>CLC</th></tr>
+        </thead>
+        <tbody id="book-rows"></tbody>
+      </table>
+      <div id="empty" class="empty hidden">暂无记录</div>
+    </div>
+  </section>
+
+  <section class="detail-pane">
+    <div id="detail-empty" class="empty tall">← 从左侧选择一本书，或点击「＋ 添加」新建</div>
+    <form id="detail-form" class="hidden" autocomplete="off">
+      <div class="detail-head">
+        <h2 id="detail-title">新建图书</h2>
+        <span id="detail-id" class="muted"></span>
+      </div>
+
+      <div class="grid">
+        <label class="col2">书名 *<input name="title" required></label>
+        <label>作者<input name="author"></label>
+        <label>译者<input name="translator"></label>
+        <label>出版社<input name="publisher"></label>
+        <label>出版地<input name="publication_place"></label>
+        <label>出版年份<input name="publication_year"></label>
+        <label>版次<input name="edition" placeholder="纯数字，如 2"></label>
+        <label>ISBN<input name="isbn"></label>
+        <label>CLC<input name="clc_code"></label>
+        <label>文献类型<input name="literature_type" placeholder="默认 M"></label>
+        <label class="col2">文件路径<input name="file_path"></label>
+        <label class="col2">摘要<textarea name="abstract" rows="4"></textarea></label>
+      </div>
+
+      <div class="detail-actions">
+        <button type="submit" class="primary">💾 保存</button>
+        <button type="button" id="btn-cite"   class="ghost">❝ 引用</button>
+        <button type="button" id="btn-rename" class="ghost">✎ 重命名</button>
+        <button type="button" id="btn-delete" class="danger">🗑 删除</button>
+      </div>
+      <div id="detail-meta" class="muted small"></div>
+    </form>
+  </section>
+</main>
+
+<!-- 通用弹层 -->
+<div id="modal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3 id="modal-title">标题</h3>
+      <button id="modal-close" class="ghost">✕</button>
+    </div>
+    <div id="modal-body" class="modal-body"></div>
+    <div id="modal-foot" class="modal-foot"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

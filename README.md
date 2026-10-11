@@ -5,7 +5,7 @@
 > 定位：一个小型、可靠、本地优先的个人图书元数据库。
 > 核心保持简单，复杂能力（CLC 分类、摘要生成等）通过 JSON/CSV 标准接口向外扩展。
 
-## 特性（M1 + M2 + M3 + M4 已完成）
+## 特性（M1–M5 已完成）
 
 - **图书管理**：`init` / `add` / `list` / `show` / `edit` / `delete`
 - **检索**：关键词 + 作者 / 年份区间 / CLC 前缀 / 文献类型 / 出版社 / 是否有文件
@@ -13,6 +13,7 @@
 - **文件重命名**：按元数据生成规范化文件名，`--dry-run` 预览 / `--apply` 执行，同步更新库内路径
 - **引用输出**：GB/T 7714-2015 专著（`book cite`）
 - **版权页提取**：本地 VLM（Ollama）从版权页图像提取元数据，人工确认后写入
+- **桌面 GUI**：pywebview + 原生 HTML/CSS/JS，内部仅 127.0.0.1 的 HTTP 端点，不对外暴露
 - **字段规范化**：版次存纯数字（`第2版`→`2`）、ISBN 去连字符、年份容错
 - **疑似重复检测**：ISBN 优先，无则 书名+作者+年份
 - **文件路径**：绝对路径原样 / 相对路径按 `library_root` 解析
@@ -23,7 +24,7 @@
 ```bash
 cd D:/Projects/book_metadata_tool
 uv venv
-uv pip install -e .
+uv pip install -e ".[gui,pdf]"    # 只要 CLI 可省去 gui/pdf
 ```
 
 ## 快速开始
@@ -63,6 +64,9 @@ book cite 1                     # 输出 GB/T 7714 引用
 book enrich --pdf "book.pdf"           # 自动定位版权页
 book enrich --pdf "book.pdf" --page 5  # 手动指定页
 book enrich --image "copyright.jpg"    # 手动指定图片
+
+# 9. 桌面 GUI（列表 / 搜索 / 详情 / 编辑 / 导入导出 / 重命名 / 引用 / 版权页提取）
+book gui
 ```
 
 ## 导入模式（§9.2）
@@ -87,7 +91,7 @@ db_path = "book.db"
 
 [vlm]
 endpoint = "http://127.0.0.1:11434"
-model = "qwen2.5-vl:3b"
+model = "qwen2.5vl:3b"
 ```
 
 ## 本地模型（M4 版权页提取）
@@ -98,7 +102,7 @@ model = "qwen2.5-vl:3b"
 # 1. 安装 Ollama —— https://ollama.com/download
 # 2. 启动服务并拉取视觉模型（约 3B）
 ollama serve
-ollama pull qwen2.5-vl:3b
+ollama pull qwen2.5vl:3b
 # 3. 安装 PDF 依赖
 uv pip install -e ".[pdf]"
 ```
@@ -122,7 +126,7 @@ uv pip install -e ".[pdf]"
 | M2 | JSON / CSV 导入导出 + 字段级 patch（显式 mode、变更预览、NULL 语义） | ✅ |
 | M3 | 文件重命名 + GB/T 7714 引用（共用 `format.py`） | ✅ |
 | M4 | 本地 VLM 版权页提取（Ollama 适配） | ✅ |
-| M5 | pywebview GUI | ⏳ |
+| M5 | pywebview GUI（内部 HTTP 端点） | ✅ |
 
 完整需求见 [`docs/PRD.md`](docs/PRD.md)。
 

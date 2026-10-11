@@ -1086,6 +1086,36 @@ SQLite
 - 端点可以选用任意轻量方案（FastAPI / Starlette / 标准库 `http.server` 均可），不作为强制依赖项；
 - WebView 内的前端仍使用普通 `fetch('/api/...')` 与核心层交互，无须把所有操作都改写成 `js_api` 桥。
 
+### GUI 实现细节（定稿）
+
+- **传输层**：标准库 `http.server.ThreadingHTTPServer`，**零第三方依赖**（不引入 FastAPI/Starlette）；
+- **绑定**：仅 `127.0.0.1`，端口由系统分配（`port=0`），**绝不对外暴露**；
+- **分层**：所有 `/api/*` 处理函数**只调用 services 层**，不直接操作 dao / 写 SQL（§17）；
+- **连接**：每个请求打开一次 `Context`（连接），用完即关 —— 天然线程安全；
+- **前端**：`HTML + CSS + JS`，无框架（§16.1），单页应用；
+- **文件选择**：仅「版权页提取」需要本地路径，通过 pywebview 的 `js_api.pick_file()` 桥实现，其余交互一律 `fetch`；
+- **启动顺序**：先起服务 → 健康检查轮询 `/api/meta` 就绪 → 再建窗口（否则白屏）。
+
+接口一览（`gui/server.py`）：
+
+```text
+GET    /api/meta                     应用信息（条数 / 库根 / 模型）
+GET    /api/books                    列表（不含摘要）
+POST   /api/books                    新增（重复 → 409 + duplicates）
+GET    /api/books/{id}               详情（含摘要）
+PUT    /api/books/{id}               编辑（局部）
+DELETE /api/books/{id}               删除
+GET    /api/search                   检索（q/author/year/clc/type/publisher/has_file）
+GET    /api/export?format=json|csv   导出（返回文本内容）
+GET    /api/cite/{id}                引用
+POST   /api/import/preview           导入预览（返回变更计划）
+POST   /api/import/apply             导入执行
+GET    /api/rename/{id}              重命名预览
+POST   /api/rename/{id}/apply        重命名执行
+POST   /api/enrich                   版权页提取（模型输出，不写库）
+POST   /api/enrich/save              确认后写入数据库
+```
+
 ------
 
 # 17. 数据库与 GUI / CLI 的关系
