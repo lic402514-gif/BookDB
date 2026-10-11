@@ -25,9 +25,11 @@ from urllib.parse import parse_qs, urlparse
 from ..config import Config
 from ..paths import LibraryRootMissingError
 from ..paths import resolve as resolve_path
+from ..db import dao
 from ..services import books as book_service
 from ..services import citation as citation_service
 from ..services import enrich as enrich_service
+from ..services import enrich_batch
 from ..services import import_export as ie
 from ..services import rename as rename_service
 from ..services import scan as scan_service
@@ -325,6 +327,116 @@ def _h_enrich_save(config: Config, match, query, body) -> dict:
     return {"id": book_id}
 
 
+# ─────────────────────────────────────────────── 批量元数据补全（VLM 批量）
+def _h_enrich_batch_preview(config: Config, match, query, body) -> dict:
+    """列出待补全的记录（**不跑模型**）—— 供 GUI 展示"哪些需要补"。"""
+    body = dict(body or {})
+    directory = (body.get("directory") or "").strip() or None
+    recursive = bool(body.get("recursive", True))
+
+    with Context.open(config) as ctx:
+        books = book_service.list_books(ctx)
+        try:
+            plan = enrich_batch.build_batch_plan(
+                ctx, books=books, directory=directory, recursive=recursive
+            )
+        except scan_service.DirectoryNotFoundError as exc:
+            raise ApiError(str(exc), 400) from exc
+
+        return {
+            "scope": directory or "全库",
+            "total": len(plan.items),
+            "todo": len(plan.todo),
+            "items": [
+                {
+                    "id": i.book_id,
+                    "title": i.title,
+                    "file": str(i.pdf) if i.pdf else "",
+                    "missing": i.missing,
+                    "skip": i.skipped,
+                }
+                for i in plan.items
+            ],
+            "unresolved": [str(p) for p in plan.unresolved_files],
+        }
+
+
+def _h_enrich_batch_item(config: Config, match, query, body) -> dict:
+    """对**单条**记录跑 VLM 补全（不写库）—— GUI 逐条调用以显示进度。"""
+    body = dict(body or {})
+    try:
+        book_id = int(body.get("id"))
+    except (TypeError, ValueError) as exc:
+        raise ApiError("缺少合法的 id", 400) from exc
+
+    with Context.open(config) as ctx:
+        book = dao.get_book(ctx.conn, book_id, with_abstract=False)
+        if book is None:
+            raise ApiError(f"记录不存在：#{book_id}", 404)
+
+        pdf = _resolve_for_batch(ctx, book.get("file_path"))
+        if pdf is None:
+            raise ApiError("该记录无文件关联或路径无法解析", 400)
+        if not pdf.is_file():
+            raise ApiError(f"文件不存在：{pdf}", 404)
+
+        try:
+            result = enrich_service.enrich_from_pdf(ctx.config, pdf)
+        except ModelUnavailableError as exc:
+            raise ApiError(f"本地模型不可用：{exc}", 503) from exc
+        except enrich_service.CopyrightPageNotFound as exc:
+            raise ApiError(str(exc), 422) from exc
+        except (ValueError, RuntimeError) as exc:
+            raise ApiError(str(exc), 400) from exc
+
+    return {
+        "id": book_id,
+        "page": result.page,
+        "metadata": result.metadata,
+        "missing": enrich_batch.missing_fields(book),
+    }
+
+
+def _resolve_for_batch(ctx: Context, stored: str | None):
+    from ..paths import resolve as _resolve
+
+    if not stored:
+        return None
+    try:
+        return _resolve(stored, ctx.config.library_root)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _h_enrich_batch_apply(config: Config, match, query, body) -> dict:
+    """把 GUI 复核过的若干条元数据写回库（没写入的一律不动）。"""
+    body = dict(body or {})
+    raw = body.get("updates")
+    if not isinstance(raw, list) or not raw:
+        raise ApiError("缺少 updates（要写入的记录列表）", 400)
+
+    updated, failed = [], []
+    with Context.open(config) as ctx:
+        for entry in raw:
+            try:
+                book_id = int(entry["id"])
+                fields = dict(entry["metadata"])
+            except (KeyError, TypeError, ValueError) as exc:
+                failed.append({"id": entry.get("id"), "error": f"字段不合法：{exc}"})
+                continue
+            fields.pop("file_path", None)          # 绝不动路径
+            patch = {k: v for k, v in fields.items() if v is not None}
+            if not patch:
+                continue
+            try:
+                dao.update_book_fields(ctx.conn, book_id, patch)
+                updated.append({"id": book_id, "fields": sorted(patch)})
+            except Exception as exc:               # noqa: BLE001
+                failed.append({"id": book_id, "error": f"{type(exc).__name__}: {exc}"})
+
+    return {"updated": updated, "failed": failed}
+
+
 # ─────────────────────────────────────────────────── 扫描建库（预览 / 执行）
 def _h_scan_preview(config: Config, match, query, body) -> dict:
     body = dict(body or {})
@@ -404,6 +516,9 @@ ROUTES = [
     ("POST", r"^/api/rename/(?P<id>\d+)/apply$", _h_rename_apply),
     ("POST", r"^/api/enrich$", _h_enrich),
     ("POST", r"^/api/enrich/save$", _h_enrich_save),
+    ("POST", r"^/api/enrich/batch/preview$", _h_enrich_batch_preview),
+    ("POST", r"^/api/enrich/batch/item$", _h_enrich_batch_item),
+    ("POST", r"^/api/enrich/batch/apply$", _h_enrich_batch_apply),
     ("POST", r"^/api/scan/preview$", _h_scan_preview),
     ("POST", r"^/api/scan/apply$", _h_scan_apply),
 ]

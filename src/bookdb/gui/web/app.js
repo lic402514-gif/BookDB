@@ -416,6 +416,206 @@ async function saveEnrich() {
   }
 }
 
+/* ══════════════════════════════════════════════ 批量元数据补全（VLM） */
+let batchResults = [];        // 逐条提取结果（含用户可能的编辑）
+let batchAbort = false;       // 用户点「中止」后置位，循环下一轮退出
+
+function doBatchEnrich(prefillDir = '') {
+  openModal('批量补全元数据',
+    `<label class="small">来源
+       <select id="be-scope" style="width:100%">
+         <option value="">全库（所有元数据不全的记录）</option>
+         <option value="dir">只处理某个目录下的记录</option>
+       </select>
+     </label>
+     <div id="be-dirwrap" class="hidden" style="margin-top:10px">
+       <label class="small">目录
+         <input id="be-dir" placeholder="E:\\Books" style="width:100%" value="${esc(prefillDir)}">
+       </label>
+       <label class="small" style="display:flex;gap:6px;align-items:center;margin-top:8px">
+         <input id="be-rec" type="checkbox" checked> 递归子目录
+       </label>
+     </div>
+     <p class="muted small" style="margin-top:10px">
+       逐条定位版权页并跑本地 VLM 补齐<b>作者 / 出版社 / 年份 / ISBN</b>。<br>
+       先列出待补清单，你确认后才开始；每条约 <b>6~15 秒</b>（3B 模型 CPU 推理），请耐心。<br>
+       提取结果会先在表格里复核，<b>勾选后才写入</b>库。
+     </p>`,
+    [{ label: '取消', onClick: closeModal },
+     { label: '选择目录…', onClick: async () => {
+         const dir = await pickFolder();
+         if (dir) { $('#be-dir').value = dir; $('#be-scope').value = 'dir'; toggleBeDir(); }
+       } },
+     { label: '下一步：列出待补', primary: true, onClick: () => batchEnrichPreview() }]);
+
+  const sel = $('#be-scope');
+  if (sel) sel.onchange = toggleBeDir;
+  toggleBeDir();
+}
+
+function toggleBeDir() {
+  const useDir = $('#be-scope') && $('#be-scope').value === 'dir';
+  const wrap = $('#be-dirwrap');
+  if (wrap) wrap.classList.toggle('hidden', !useDir);
+}
+
+async function batchEnrichPreview() {
+  const useDir = $('#be-scope') && $('#be-scope').value === 'dir';
+  const directory = useDir ? ($('#be-dir') ? $('#be-dir').value.trim() : '') : '';
+  if (useDir && !directory) { toast('请填写要处理的目录', true); return; }
+  const recursive = $('#be-rec') ? $('#be-rec').checked : true;
+
+  let plan;
+  try {
+    plan = await api('/api/enrich/batch/preview', {
+      method: 'POST', body: { directory, recursive } });
+  } catch (err) { toast(err.message, true); return; }
+
+  if (!plan.todo) {
+    openModal('无需补全',
+      `<p class="muted">${esc(plan.scope)}：共 ${plan.total} 条，<b>没有需要补全的记录</b>。</p>
+       ${plan.unresolved.length ? `<p class="muted small">另有 ${plan.unresolved.length} 个 PDF 未匹配到记录。</p>` : ''}`,
+      [{ label: '返回', onClick: () => doBatchEnrich(directory) }, { label: '关闭', onClick: closeModal }]);
+    return;
+  }
+
+  const rows = plan.items.filter(it => !it.skip).map(it =>
+    `<tr><td><input type="checkbox" class="be-cb" data-id="${it.id}" checked></td>
+      <td>${it.id}</td><td>${esc(it.title)}</td>
+      <td class="muted">${esc(it.missing.join('、'))}</td></tr>`).join('');
+
+  openModal('待补全清单',
+    `<p class="small">范围 <b>${esc(plan.scope)}</b>　共 ${plan.total} 条，
+       待补 <b>${plan.todo}</b> 条
+       ${plan.unresolved.length ? `　<span class="muted">${plan.unresolved.length} 个 PDF 未匹配记录</span>` : ''}</p>
+     <div style="max-height:46vh;overflow:auto;margin-top:6px">
+       <table class="mini">
+         <thead><tr><th><input id="be-all" type="checkbox" checked></th>
+           <th>#</th><th>书名</th><th>缺失字段</th></tr></thead>
+         <tbody>${rows}</tbody>
+       </table>
+     </div>
+     <p class="muted small" style="margin-top:8px">点「开始提取」后逐条跑模型，约 6~15 秒/条。</p>`,
+    [{ label: '返回', onClick: () => doBatchEnrich(directory) },
+     { label: '开始提取', primary: true, onClick: () => batchEnrichRun(directory, recursive) }]);
+
+  const all = $('#be-all');
+  if (all) all.onchange = () => $all('.be-cb').forEach(cb => { cb.checked = all.checked; });
+}
+
+async function batchEnrichRun(directory, recursive) {
+  const ids = $all('.be-cb:checked').map(cb => Number(cb.dataset.id));
+  if (!ids.length) { toast('未勾选任何记录', true); return; }
+
+  batchResults = [];
+  const render = (done, total, current, failed) => {
+    const pct = Math.round((done / total) * 100);
+    const box = $('#be-progress');
+    if (!box) return;
+    box.innerHTML =
+      `<div class="small">进度 <b>${done}/${total}</b>（${pct}%）
+         ${failed ? `<span style="color:#b3261e">失败 ${failed}</span>` : ''}</div>
+       <div style="height:8px;background:var(--line);border-radius:4px;margin:6px 0 10px">
+         <div style="height:8px;width:${pct}%;background:var(--accent);border-radius:4px"></div>
+       </div>
+       <p class="muted small">${esc(current || '')}</p>`;
+  };
+
+  openModal('正在提取…',
+    `<div id="be-progress"></div>
+     <p class="muted small">请勿关闭窗口。3B 模型逐页推理较慢，属正常现象。</p>`,
+    [{ label: '中止', onClick: () => { batchAbort = true; } }]);
+  batchAbort = false;
+  render(0, ids.length, '准备中…', 0);
+
+  let failed = 0;
+  for (let n = 0; n < ids.length; n++) {
+    if (batchAbort) break;
+    const id = ids[n];
+    let label = '#' + id;
+    try {
+      const r = await api('/api/enrich/batch/item', { method: 'POST', body: { id } });
+      batchResults.push(r);
+      label = `#${id} ✓ ${r.metadata.title || ''}（第 ${r.page || '?'} 页）`;
+    } catch (err) {
+      failed++;
+      batchResults.push({ id, error: err.message, metadata: null });
+      label = `#${id} ✗ ${err.message}`;
+    }
+    render(n + 1, ids.length, label, failed);
+  }
+
+  showBatchResults();
+}
+
+function showBatchResults() {
+  const ok = batchResults.filter(r => r.metadata);
+  const bad = batchResults.filter(r => !r.metadata);
+  if (!ok.length) {
+    openModal('提取结果',
+      `<p class="muted">没有成功提取到元数据的记录。</p>` +
+      bad.map(r => `<p class="small" style="color:#b3261e">#${r.id} ${esc(r.error)}</p>`).join(''),
+      [{ label: '关闭', onClick: closeModal }]);
+    return;
+  }
+
+  const F = ['title', 'author', 'translator', 'publisher', 'publication_place',
+             'publication_year', 'edition', 'isbn'];
+  const NAME = { title: '书名', author: '作者', translator: '译者', publisher: '出版社',
+                 publication_place: '出版地', publication_year: '年份', edition: '版次', isbn: 'ISBN' };
+
+  const rows = ok.map(r => {
+    const cells = F.map(f => {
+      const isMissing = (r.missing || []).includes(f === 'publisher' ? 'publisher_name' : f);
+      return `<td><input class="be-f" data-id="${r.id}" data-field="${f}"
+                 value="${esc(r.metadata[f] == null ? '' : r.metadata[f])}"
+                 style="${isMissing ? 'border-color:var(--accent)' : ''}"></td>`;
+    }).join('');
+    return `<tr><td><input type="checkbox" class="be-write" data-id="${r.id}" checked></td>${cells}</tr>`;
+  }).join('');
+
+  openModal('复核并写入',
+    `<p class="small">成功 <b>${ok.length}</b> 条${bad.length ? `，失败 <span style="color:#b3261e">${bad.length}</span> 条` : ''}。
+       可直接在表格里改值，<b>取消勾选即不写入该条</b>。</p>
+     <div style="max-height:48vh;overflow:auto;margin-top:6px">
+       <table class="mini">
+         <thead><tr><th><input id="be-wall" type="checkbox" checked></th>
+           ${F.map(f => `<th>${NAME[f]}</th>`).join('')}</tr></thead>
+         <tbody>${rows}</tbody>
+       </table>
+     </div>
+     ${bad.length ? `<div class="small" style="color:#b3261e;margin-top:8px">`
+        + bad.map(r => `#${r.id} ${esc(r.error)}`).join('<br>') + '</div>' : ''}`,
+    [{ label: '放弃', onClick: () => { closeModal(); loadList(); } },
+     { label: '写入选中', primary: true, onClick: () => batchEnrichApply() }]);
+
+  const wall = $('#be-wall');
+  if (wall) wall.onchange = () => $all('.be-write').forEach(cb => { cb.checked = wall.checked; });
+}
+
+async function batchEnrichApply() {
+  const chosen = new Set($all('.be-write:checked').map(cb => Number(cb.dataset.id)));
+  if (!chosen.size) { toast('未勾选任何记录', true); return; }
+
+  const updates = [];
+  for (const id of chosen) {
+    const metadata = {};
+    $all(`.be-f[data-id="${id}"]`).forEach(inp => {
+      const v = inp.value.trim();
+      if (v !== '') metadata[inp.dataset.field] = v;
+    });
+    if (Object.keys(metadata).length) updates.push({ id, metadata });
+  }
+  if (!updates.length) { toast('没有可写入的字段', true); return; }
+
+  try {
+    const r = await api('/api/enrich/batch/apply', { method: 'POST', body: { updates } });
+    closeModal();
+    toast(`已更新 ${r.updated.length} 条${r.failed.length ? `，失败 ${r.failed.length} 条` : ''}`);
+    await loadList();
+  } catch (err) { toast(err.message, true); }
+}
+
 /* ══════════════════════════════════════════════════════ 扫描建库 */
 async function pickFolder() {
   if (window.pywebview && window.pywebview.api && window.pywebview.api.pick_folder) {
@@ -548,6 +748,7 @@ function bind() {
   $('#btn-import').onclick = pickImportFile;
   $('#btn-export').onclick = exportData;
   $('#btn-enrich').onclick = doEnrich;
+  $('#btn-enrich-all').onclick = () => doBatchEnrich();
   $('#btn-cite').onclick = showCite;
   $('#btn-rename').onclick = showRename;
   $('#btn-open').onclick = openFile;

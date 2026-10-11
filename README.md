@@ -9,6 +9,7 @@
 
 - **图书管理**：`init` / `add` / `list` / `show` / `edit` / `delete`
 - **扫描建库**：`book scan <dir>` 扫描目录（递归），从**文件名**解析书名 / 作者 / 版次并批量建记录；先预览后写入
+- **批量补全**：`book enrich --missing` / `--dir <目录>` 逐本跑本地 VLM 读版权页，补齐作者 / 出版社 / 年份 / ISBN；先复核后写入，**幂等**（补过的不再重跑）
 - **检索**：关键词 + 作者 / 年份区间 / CLC 前缀 / 文献类型 / 出版社 / 是否有文件
 - **数据交换**：JSON / CSV 导入导出 + 字段级 patch（显式 `mode`、变更预览、NULL 语义）
 - **文件重命名**：按元数据生成规范化文件名，`--dry-run` 预览 / `--apply` 执行，同步更新库内路径
@@ -71,7 +72,13 @@ book enrich --image "copyright.jpg"    # 手动指定图片
 book scan "D:/Books" --recursive        # 预览：新建 / 已入库 / 疑似重复
 book scan "D:/Books" --apply --yes      # 确认后写库
 
-# 10. 桌面 GUI（列表 / 搜索 / 详情 / 编辑 / 导入导出 / 重命名 / 引用 / 版权页提取 / 扫描建库）
+# 10. 批量补全元数据（VLM 逐本读版权页，补齐作者 / 出版社 / 年份 / ISBN）
+book enrich --missing -y                # 全库：所有缺元数据的记录
+book enrich --dir "D:/Books" -y         # 只处理该目录内的记录
+book enrich --missing --limit 10        # 先试 10 条
+book enrich --missing --no-overwrite    # 只填空缺，不覆盖已有值
+
+# 11. 桌面 GUI（列表 / 搜索 / 详情 / 编辑 / 导入导出 / 重命名 / 引用 / 版权页提取 / 扫描建库 / 批量补全）
 book gui
 ```
 

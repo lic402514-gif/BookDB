@@ -443,3 +443,60 @@ def test_scan_apply_empty_selection_creates_nothing(api):
         "POST", "/api/scan/apply", {"directory": str(lib), "selected": []}
     )
     assert status == 200 and result["created"] == 0
+
+
+# ─────────────────────────────────────────────────── 批量补全（接口）
+def test_enrich_batch_preview_lists_todo(api):
+    """只有「缺元数据」的记录进待补清单。"""
+    lib = Path(api.config.library_root)
+    (lib / "x.pdf").write_bytes(b"%PDF-1.4")
+    bare = add(api, title="缺元数据", file_path="x.pdf", isbn=None,
+               author=None, publisher=None, publication_year=None)
+    add(api, title="已齐全", author="齐备者", publication_year=2020, isbn="9780000000002")
+
+    status, plan = api.call("POST", "/api/enrich/batch/preview", {})
+    assert status == 200
+    assert plan["scope"] == "全库"
+    todo = [i for i in plan["items"] if not i["skip"]]
+    assert [i["id"] for i in todo] == [bare]
+    assert set(todo[0]["missing"]) == {"author", "publisher_name", "publication_year"}
+
+
+def test_enrich_batch_item_reports_errors(api):
+    """无文件关联 / 文件缺失 / 记录不存在 → 各自的 4xx 语义。"""
+    nofile = add(api, title="没文件", isbn="9780000000011",
+                 author="甲作者", publication_year=2001)
+    ghost = add(api, title="文件不在", isbn="9780000000012",
+                author="乙作者", publication_year=2002, file_path="nope.pdf")
+
+    s1, p1 = api.call("POST", "/api/enrich/batch/item", {"id": nofile})
+    assert s1 == 400 and "无文件关联" in p1["error"]
+
+    s2, p2 = api.call("POST", "/api/enrich/batch/item", {"id": ghost})
+    assert s2 == 404 and "不存在" in p2["error"]
+
+    s3, _p3 = api.call("POST", "/api/enrich/batch/item", {"id": 99999})
+    assert s3 == 404
+
+
+def test_enrich_batch_apply_writes_and_ignores_path(api):
+    lib = Path(api.config.library_root)
+    (lib / "x.pdf").write_bytes(b"%PDF-1.4")
+    book = add(api, title="待补", file_path="x.pdf",
+               author=None, publisher=None, publication_year=None)
+
+    status, r = api.call("POST", "/api/enrich/batch/apply", {"updates": [
+        {"id": book, "metadata": {"author": "王良卿", "publication_year": 2010,
+                                  "file_path": "D:/evil.pdf"}},   # 路径必须被忽略
+    ]})
+    assert status == 200 and len(r["updated"]) == 1
+
+    _s, got = api.call("GET", f"/api/books/{book}")
+    assert got["author"] == "王良卿"
+    assert got["publication_year"] == 2010
+    assert got["file_path"] == "x.pdf"           # 没被改写
+
+
+def test_enrich_batch_apply_rejects_empty(api):
+    status, payload = api.call("POST", "/api/enrich/batch/apply", {"updates": []})
+    assert status == 400 and "updates" in payload["error"]

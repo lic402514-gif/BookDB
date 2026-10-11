@@ -22,6 +22,7 @@ from ..paths import display as display_path
 from ..services import books as book_service
 from ..services import citation as citation_service
 from ..services import enrich as enrich_service
+from ..services import enrich_batch
 from ..services import import_export as ie
 from ..services import rename as rename_service
 from ..services import scan as scan_service
@@ -634,16 +635,46 @@ def enrich(
     ctx: typer.Context,
     pdf: Path = typer.Option(None, "--pdf", help="PDF 文件（自动定位版权页）"),
     image: Path = typer.Option(None, "--image", help="版权页图片"),
+    missing: bool = typer.Option(
+        False, "--missing", help="批量：补全所有「元数据不全」的库内记录"
+    ),
+    directory: Path = typer.Option(
+        None, "--dir", help="批量：只处理文件落在该目录下的记录（递归）"
+    ),
+    limit: int = typer.Option(None, "--limit", help="批量：最多处理几条"),
+    no_overwrite: bool = typer.Option(
+        False, "--no-overwrite", help="批量：只填补空缺字段，不覆盖已有值"
+    ),
     page: int = typer.Option(None, "--page", help="手动指定 PDF 页码（1-based）"),
     yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认"),
 ) -> None:
-    """从版权页提取元数据（PRD §12）。模型输出须人工确认后才写入数据库。"""
-    if bool(pdf) == bool(image):
+    """从版权页提取元数据（PRD §12）。
+
+    单本：`--pdf` 或 `--image`。
+    批量：`--missing`（全库缺元数据的记录）或 `--dir <目录>`（限定某目录内的记录）。
+    模型输出须人工确认后才写入数据库（§12.5）。
+    """
+    single = pdf is not None or image is not None
+    batch = missing or directory is not None
+
+    if single and batch:
+        err_console.print("[red]单本模式（--pdf/--image）与批量模式（--missing/--dir）不能同时使用。[/red]")
+        raise typer.Exit(code=1)
+    if not single and not batch:
+        err_console.print(
+            "[red]请指定来源：[/red]--pdf / --image（单本），或 --missing / --dir（批量）。"
+        )
+        raise typer.Exit(code=1)
+    if single and bool(pdf) == bool(image):
         err_console.print("[red]必须且只能指定 --pdf 或 --image 之一。[/red]")
         raise typer.Exit(code=1)
     if page is not None and not pdf:
         err_console.print("[red]--page 只能与 --pdf 一起使用。[/red]")
         raise typer.Exit(code=1)
+
+    if batch:
+        _enrich_batch(ctx, directory, limit=limit, yes=yes, overwrite=not no_overwrite)
+        return
 
     source = pdf or image
     if not source.exists():
@@ -693,6 +724,121 @@ def enrich(
 
     title = result.metadata.get("title") or "（无书名）"
     console.print(f"[green]✓[/green] 已写入：#{book_id} 《{title}》")
+
+
+# ══════════════════════════════════════════════════ 批量补全（--missing / --dir）
+def _enrich_batch(
+    ctx: typer.Context,
+    directory: Path | None,
+    *,
+    limit: int | None,
+    yes: bool,
+    overwrite: bool,
+) -> None:
+    """批量跑 VLM 补全元数据：先逐条提取 → 表格复核 → 确认后写库。"""
+    with _open(ctx) as octx:
+        books = book_service.list_books(octx)          # 列表列已够判定「元数据不全」
+        scope = f"目录 {directory}" if directory else "全库"
+        console.print(
+            f"[dim]批量补全（{scope}）：共 {len(books)} 条记录，"
+            f"逐条跑本地模型（约 6~15 秒/本）…[/dim]"
+        )
+
+        try:
+            plan = enrich_batch.build_batch_plan(
+                octx, books=books, directory=directory, limit=limit
+            )
+        except scan_service.DirectoryNotFoundError as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1)
+
+        todo = plan.todo
+        if not todo:
+            console.print("[green]✓[/green] 没有需要补全的记录（都已有元数据或无法处理）。")
+            _render_batch_summary(plan)
+            return
+
+        console.print(f"[dim]待处理 {len(todo)} 条…[/dim]")
+        with console.status("[dim]提取中…[/dim]") as status:
+            for n, item in enumerate(todo, 1):
+                status.update(f"[dim]提取中… {n}/{len(todo)}：{item.title[:24]}[/dim]")
+                try:
+                    enrich_batch.run_item(octx, item)
+                except ModelUnavailableError as exc:
+                    err_console.print(
+                        f"[yellow]本地模型不可用：[/yellow]\n{exc}\n"
+                        "[dim]（模型仅被 enrich 使用，其余功能不受影响）[/dim]"
+                    )
+                    raise typer.Exit(code=1)
+
+        _render_batch_table(plan)
+
+        ok = plan.done
+        if not ok:
+            err_console.print("[yellow]没有成功提取到元数据的记录。[/yellow]")
+            raise typer.Exit(code=1)
+
+        if not yes and not typer.confirm(f"写入这 {len(ok)} 条？", default=False):
+            console.print("[dim]已取消，未写入。[/dim]")
+            raise typer.Exit(code=0)
+
+        result = enrich_batch.apply_batch_plan(octx, plan, overwrite=overwrite)
+
+    console.print(
+        f"[green]✓[/green] 已更新 {len(result['updated'])} 条"
+        + (f"，失败 {len(result['failed'])} 条" if result["failed"] else "")
+    )
+    for bad in result["failed"]:
+        err_console.print(f"  [red]#{bad['id']}[/red] {bad['error']}")
+
+
+def _render_batch_summary(plan) -> None:
+    """只打统计，不打逐条表（无待处理项时用）。"""
+    console.print(
+        f"[dim]跳过 {len(plan.skipped)} 条（元数据已齐 / 无文件关联 / 非 PDF）[/dim]"
+    )
+    for item in plan.unresolved_files:
+        console.print(f"[dim]  未匹配到记录：{item.name}[/dim]")
+
+
+def _render_batch_table(plan) -> None:
+    """逐条复核表：来源页 / 状态 / 提取到的关键字段。"""
+    table = Table(title="批量补全复核", show_lines=False, header_style="bold")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("书名", max_width=30)
+    table.add_column("页", justify="right", style="dim")
+    table.add_column("状态")
+    table.add_column("作者", max_width=18)
+    table.add_column("出版社", max_width=18)
+    table.add_column("年", justify="right")
+
+    for item in plan.items:
+        if item.metadata:
+            meta = item.metadata
+            status = "[green]成功[/green]"
+            page = str(item.page or "")
+        elif item.error:
+            status = f"[red]失败[/red]"
+            page = ""
+        else:
+            status = f"[dim]跳过[/dim]"
+            page = ""
+        table.add_row(
+            str(item.book_id),
+            item.title[:30],
+            page,
+            status,
+            (item.metadata or {}).get("author") or (
+                f"[red]{item.error[:26]}[/red]" if item.error else ""
+            ),
+            (item.metadata or {}).get("publisher") or "",
+            str((item.metadata or {}).get("publication_year") or ""),
+        )
+    console.print(table)
+    console.print(
+        f"[dim]成功 {len(plan.done)} 条，失败 {len(plan.failed)} 条，"
+        f"跳过 {len(plan.skipped)} 条[/dim]"
+    )
 
 
 # ══════════════════════════════════════════════════ 扫描建库（PRD 扩展）

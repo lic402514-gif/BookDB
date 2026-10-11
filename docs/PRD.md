@@ -1123,6 +1123,9 @@ GET    /api/rename/{id}              重命名预览
 POST   /api/rename/{id}/apply        重命名执行
 POST   /api/enrich                   版权页提取（模型输出，不写库）
 POST   /api/enrich/save              确认后写入数据库
+POST   /api/enrich/batch/preview     批量补全：列出待补记录（不跑模型）
+POST   /api/enrich/batch/item        批量补全：对单条跑 VLM（不写库；GUI 逐条调用显示进度）
+POST   /api/enrich/batch/apply       批量补全：把复核后的若干条写回库
 POST   /api/scan/preview             扫描目录 → 建库计划（不写库）
 POST   /api/scan/apply               按勾选项批量建记录
 ```
@@ -1304,6 +1307,20 @@ gui
 
 `book scan <dir>` 扫描目录（默认递归），从**文件名**解析书名 / 作者 / 版次并生成建库计划；
 默认**只预览**，`--apply` 才写库（先预览后写入，与 §10 导入预览一致）。
+
+`book enrich` 支持**单本**与**批量**两种模式：
+
+```text
+book enrich --pdf <文件>          单本：从该 PDF 提取
+book enrich --image <图片>        单本：从版权页图片提取
+book enrich --missing             批量：全库缺元数据的记录
+book enrich --dir <目录>          批量：只处理该目录内的记录
+  --limit N           最多处理 N 条
+  --no-overwrite      只填空缺字段，不覆盖已有值
+```
+
+批量模式同样**先提取、预览复核、确认后写入**（§12.5）。触发补全的条件刻意**不含出版年份**
+—— 部分版权页本就不印年份，若把年份计入，这些书会被每次批量反复重跑（实测发现）。
 
 ------
 
