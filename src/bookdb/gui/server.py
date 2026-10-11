@@ -185,6 +185,8 @@ def _resolve_book_file(config: Config, book_id: int) -> Path:
         path = resolve_path(stored, config.library_root)
     except LibraryRootMissingError as exc:
         raise ApiError(str(exc), 409) from exc
+    except ValueError as exc:                      # 含 PathSyntaxError
+        raise ApiError(str(exc), 400) from exc
     if path is None or not path.exists():
         raise ApiError(f"文件不存在：{path}", 404)
     return path

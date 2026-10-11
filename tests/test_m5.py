@@ -398,3 +398,12 @@ def test_edit_form_absolute_inside_root_becomes_relative(api):
     assert status == 200
     _s, detail = api.call("GET", f"/api/books/{book_id}")
     assert detail["file_path"] == "in.pdf"
+
+
+def test_api_rejects_fullwidth_colon_path(api):
+    """全角冒号路径 → 400 明确报错（不是静默拼成 X:\\Y\\X:\\Y\\...）。"""
+    status, payload = api.call(
+        "POST", "/api/books", {**SAMPLE, "title": "全角冒号", "file_path": "E：\\Books\\example.pdf"}
+    )
+    assert status == 400
+    assert "全角" in payload["error"]

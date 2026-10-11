@@ -20,7 +20,7 @@ from bookdb.normalize import (  # noqa: E402
     normalize_isbn,
     parse_year_range,
 )
-from bookdb.paths import resolve, to_stored  # noqa: E402
+from bookdb.paths import PathSyntaxError, resolve, to_stored  # noqa: E402
 from bookdb.services.format import format_edition  # noqa: E402
 from bookdb.services import books as book_service  # noqa: E402
 from bookdb.services import search as search_service  # noqa: E402
@@ -89,6 +89,46 @@ def test_path_resolution(tmp_path: Path):
     assert to_stored(absolute, root) == str(absolute)          # 库外 → 绝对
     assert resolve("a.pdf", root) == (root / "a.pdf").resolve()
     assert resolve(str(absolute), root) == absolute
+
+
+def test_path_strips_surrounding_whitespace(tmp_path: Path):
+    """首尾空白（复制粘贴常见）应被去掉，而不是当成相对路径拼接。"""
+    root = tmp_path / "lib"
+    root.mkdir()
+    raw = str(root / "a.pdf")
+    assert to_stored(f"  {raw}  ", root) == "a.pdf"
+    assert resolve(f"  {raw}  ", root) == (root / "a.pdf").resolve()
+
+
+def test_path_strips_surrounding_quotes(tmp_path: Path):
+    """资源管理器「复制路径」带引号 → 自动去掉，不误判为相对路径。"""
+    root = tmp_path / "lib"
+    root.mkdir()
+    raw = str(root / "a.pdf")
+    assert to_stored(f'"{raw}"', root) == "a.pdf"
+    assert resolve(f'"{raw}"', root) == (root / "a.pdf").resolve()
+
+
+def test_path_rejects_fullwidth_colon(tmp_path: Path):
+    """盘符用全角冒号（中文输入法）→ 明确报错，绝不静默拼接成 E:\\Books\\E:\\...。"""
+    root = tmp_path / "lib"
+    root.mkdir()
+    bad = "E：\\Books\\example.pdf"
+    with pytest.raises(PathSyntaxError) as ei:
+        to_stored(bad, root)
+    assert "全角" in str(ei.value)
+    with pytest.raises(PathSyntaxError):
+        resolve(bad, root)
+
+
+def test_path_never_doubles_prefix(tmp_path: Path):
+    """回归：任何输入都不应产出「库根 + 绝对路径」的叠加路径。"""
+    root = tmp_path / "lib"
+    root.mkdir()
+    for raw in (str(root / "a.pdf"), "a.pdf", f"  {str(root / 'a.pdf')}  "):
+        stored = to_stored(raw, root)
+        got = resolve(stored, root)
+        assert str(got).count(str(root)) <= 1, f"路径被叠加：{got}"
 
 
 # ───────────────────────────────────────────────────────────────── business
