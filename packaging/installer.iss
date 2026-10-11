@@ -90,15 +90,18 @@ Filename: "{tmp}\MicrosoftEdgeWebview2Setup.exe"; \
 Filename: "{app}\{#AppExeName}"; Description: "立即启动 {#AppName}"; \
     Flags: nowait postinstall skipifsilent
 
-[UninstallRun]
-; 注意：这里**故意为空** ——
-; 卸载**不动**任何用户数据（既不删 Library，也默认不删 settings）。
-
 [UninstallDelete]
-; ⚠️ 只删**我们确知属于程序**的路径。
-; {app} 由 Inno 自动移除，这里额外清运行时缓存。
-; **绝不**递归删除 {app} 的上级目录（用户可能把 Library 建在那里）。
-Type: filesandordirs; Name: "{app}\_internal\__pycache__"
+; ⚠️ 只删**确知属于程序**的路径；**绝不**递归删除 {app} 的上级目录
+; （用户可能把 Library 建在那里）。
+;
+; 说明：{app} 会由 Inno 自动移除，但 PyInstaller 的 `_internal` 里含
+; 大量 .pyc/运行时文件，卸载时可能因清理顺序残留空目录或 __pycache__。
+; 这里显式声明，确保卸载后不留残余。
+; **注意不要动** {userappdata}\BookDB —— 那是用户的应用设置，默认保留。
+Type: filesandordirs; Name: "{app}\_internal"
+
+[UninstallRun]
+; 故意为空 —— 卸载**不动**任何用户数据（既不删 Library，也默认不删 settings）
 
 [Code]
 const

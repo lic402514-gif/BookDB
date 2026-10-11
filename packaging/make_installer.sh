@@ -17,7 +17,14 @@ ISCC_CANDIDATES=(
   "/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
   "/c/Program Files/Inno Setup 6/ISCC.exe"
   "$LOCALAPPDATA/Programs/Inno Setup 6/ISCC.exe"
+  "/d/Tools/Inno Setup 6/ISCC.exe"
+  "/d/Inno Setup 6/ISCC.exe"
 )
+
+# 环境变量优先（用户可 export ISCC=... 覆盖）
+if [ -n "${ISCC:-}" ]; then
+  ISCC_CANDIDATES=("$ISCC" "${ISCC_CANDIDATES[@]}")
+fi
 
 echo "[1/4] 定位 ISCC.exe"
 ISCC=""

@@ -14,6 +14,12 @@
     路径 hook（PyInstaller 对 editable 安装的解析并不可靠）。
   - `collect_all("webview")` —— pywebview 需要它的 JS/平台模块等包内数据，
     否则运行时找不到后端。
+  - ⚠️ **必须补齐 pywebview 三个架构的 WebView2Loader.dll**：
+    `webview/platforms/edgechromium.py` 会**无条件**遍历
+    `('win-arm64', 'win-x64', 'win-x86')` 逐个调用 `interop_dll_path()`，
+    任一路径不存在就抛 `FileNotFoundError: Cannot find win-<arch>`。
+    而 PyInstaller 默认**只收集当前架构**的 DLL（x64 机器只留 win-x64），
+    导致 x64 机器上启动即崩。三个 DLL 加起来仅 ~360 KB，索性全带上。
   - `datas` 带上 `bookdb/gui/web` —— 前端资源；运行时由
     `gui/server._web_dir()` 从 `sys._MEIPASS/bookdb/gui/web` 读取。
   - `console=False` —— 双击不弹黑窗（用户明确要求）。
@@ -21,12 +27,22 @@
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, get_package_paths
 
 ROOT = Path(SPECPATH).parent          # packaging/ 的上一级 = 项目根
 SRC = ROOT / "src"
 
 webview_datas, webview_binaries, webview_hidden = collect_all("webview")
+
+# ── 补齐三个架构的 WebView2Loader.dll（见文件头说明）────────────────────
+_, _wv_pkg = get_package_paths("webview")
+_runtimes = Path(_wv_pkg) / "lib" / "runtimes"
+webview_arch_datas = [
+    (str(_runtimes / arch / "native" / "WebView2Loader.dll"),
+     f"webview/lib/runtimes/{arch}/native")
+    for arch in ("win-arm64", "win-x64", "win-x86")
+    if (_runtimes / arch / "native" / "WebView2Loader.dll").is_file()
+]
 
 a = Analysis(
     [str(ROOT / "packaging" / "BookDB.py")],
@@ -34,6 +50,7 @@ a = Analysis(
     binaries=webview_binaries,
     datas=[
         *webview_datas,
+        *webview_arch_datas,
         (str(SRC / "bookdb" / "gui" / "web"), "bookdb/gui/web"),
     ],
     hiddenimports=[

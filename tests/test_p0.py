@@ -18,9 +18,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from bookdb.config import Config  # noqa: E402
-from bookdb.gui import library  # noqa: E402
-from bookdb.gui import main as gui_main  # noqa: E402
+from bookdb.gui import library
 from bookdb.gui import settings  # noqa: E402
+from bookdb.gui import main as gui_main  # noqa: E402
 from bookdb.gui.server import create_server, server_url  # noqa: E402
 from bookdb.services import books as book_service  # noqa: E402
 from bookdb.services.context import Context  # noqa: E402
@@ -286,6 +286,11 @@ def test_endpoint_probe_and_create(tmp_path: Path):
         status, created = call("POST", "/api/library/create", {"path": str(target)})
         assert status == 200 and created["name"] == "Created"
         assert (target / "book.toml").is_file()
+
+        # 建完即记入应用设置 —— 否则「最近使用」永远为空（曾漏掉）
+        saved = settings.Settings.load()
+        assert Path(saved.last_library) == target
+        assert any(Path(r.path) == target for r in saved.recent)
 
         status, ok = call("POST", "/api/library/probe", {"path": str(target)})
         assert status == 200 and ok["valid"] is True and ok["has_db"] is True

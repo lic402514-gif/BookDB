@@ -165,7 +165,11 @@ def _h_library_probe(config: Config | None, match, query, body) -> dict:
 
 
 def _h_library_create(config: Config | None, match, query, body) -> dict:
-    """在指定目录新建 Library（幂等；已存在数据库则 409）。"""
+    """在指定目录新建 Library（幂等；已存在数据库则 409）。
+
+    建完即记入应用设置（最近列表），与 `/api/library/open` 语义一致 ——
+    这样即使调用方没跟一次 `open`，下次启动也能在「最近使用」里看到它。
+    """
     body = dict(body or {})
     target = str(body.get("path") or "").strip()
     if not target:
@@ -178,6 +182,11 @@ def _h_library_create(config: Config | None, match, query, body) -> dict:
         raise ApiError(f"该目录已有书库数据库：{exc.db_path}", 409) from exc
     except (library.LibraryError, OSError, ValueError) as exc:
         raise ApiError(str(exc), 400) from exc
+
+    state = settings.Settings.load()
+    state.touch(lib.path, lib.name)
+    state.save()
+
     return {"path": str(lib.path), "name": lib.name}
 
 
