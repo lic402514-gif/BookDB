@@ -57,7 +57,11 @@ function openModal(title, bodyHTML, buttons = []) {
 function closeModal() { $('#modal').classList.add('hidden'); }
 
 /* ══════════════════════════════════════════════════════ 列表 */
-const state = { books: [], current: null, mode: 'view' };
+const state = {
+  books: [], current: null, mode: 'view',
+  selected: new Set(),        // 多选中的 id
+  anchor: null,               // Shift 区间选择的锚点
+};
 
 async function loadMeta() {
   try {
@@ -151,20 +155,96 @@ function renderRows(items) {
   tb.innerHTML = '';
   $('#empty').classList.toggle('hidden', items.length > 0);
   $('#list-count').textContent = `共 ${items.length} 条`;
+
   for (const b of items) {
     const tr = document.createElement('tr');
     tr.dataset.id = b.id;
+    const checked = state.selected.has(b.id) ? 'checked' : '';
     tr.innerHTML =
+      `<td class="sel"><input type="checkbox" class="row-cb" ${checked}></td>` +
       `<td class="id">${b.id}</td>` +
       `<td>${esc(b.title)}</td>` +
       `<td>${esc(b.author)}</td>` +
       `<td>${esc(b.publisher_name)}</td>` +
       `<td>${b.publication_year ?? ''}</td>` +
       `<td>${esc(b.clc_code)}</td>`;
-    tr.onclick = () => selectBook(b.id);
+
+    const cb = tr.querySelector('.row-cb');
+    cb.onchange = (e) => {
+      e.stopPropagation();
+      state.anchor = b.id;
+      pickRow(b.id, cb.checked, false);
+    };
+
+    tr.onclick = (e) => {
+      if (e.target === cb) return;                       // 复选框自行处理
+      if (e.ctrlKey || e.metaKey) {                      // Ctrl 点击 → 加选/减选
+        e.preventDefault();
+        pickRow(b.id, !state.selected.has(b.id), false);
+        return;
+      }
+      if (e.shiftKey) {                                  // Shift 点击 → 区间选择
+        e.preventDefault();
+        selectRange(b.id);
+        return;
+      }
+      selectBook(b.id);                                  // 普通点击 → 详情（原行为不变）
+    };
+
     tb.appendChild(tr);
   }
   if (state.current) highlightRow(state.current.id);
+  syncSelectionUI();
+}
+
+/* ══════════════════════════════════════════════════ 多选 */
+function pickRow(id, on, rerender = true) {
+  if (on) state.selected.add(id); else state.selected.delete(id);
+  if (rerender) {
+    const tr = $all('#book-rows tr').find(x => Number(x.dataset.id) === id);
+    const cb = tr && tr.querySelector('.row-cb');
+    if (cb) cb.checked = on;
+  }
+  syncSelectionUI();
+}
+
+function selectRange(id) {
+  const ids = state.books.map(b => b.id);
+  const from = ids.indexOf(state.anchor ?? id);
+  const to = ids.indexOf(id);
+  if (from < 0 || to < 0) { pickRow(id, true); state.anchor = id; return; }
+  const [lo, hi] = from <= to ? [from, to] : [to, from];
+  for (let i = lo; i <= hi; i++) state.selected.add(ids[i]);
+  state.anchor = id;
+  renderRows(state.books);
+}
+
+function clearSelection() {
+  state.selected.clear();
+  state.anchor = null;
+  renderRows(state.books);
+}
+
+function syncSelectionUI() {
+  const n = state.selected.size;
+  $('#batch-bar').classList.toggle('hidden', n === 0);
+  $('#batch-count').textContent = `已选 ${n} 本`;
+
+  const all = $('#sel-all');
+  if (all) {
+    const total = state.books.length;
+    all.checked = total > 0 && state.selected.size >= total;
+    all.indeterminate = state.selected.size > 0 && state.selected.size < total;
+  }
+}
+
+function toggleSelectAll() {
+  const want = $('#sel-all').checked;
+  for (const b of state.books) {
+    if (want) state.selected.add(b.id); else state.selected.delete(b.id);
+  }
+  state.anchor = null;
+  renderRows(state.books);
 }
 
 function highlightRow(id) {
@@ -821,6 +901,216 @@ function clearFilters() {
   loadList();
 }
 
+/* ══════════════════════════════════════════════ 批量操作（重命名/移动/删除） */
+const BATCH_STATUS = {
+  rename:    ['将改名', 'st-ok'],
+  move:      ['将移动', 'st-ok'],
+  delete:    ['将删除', 'st-ok'],
+  unchanged: ['已规范 / 无需动', 'st-dim'],
+  conflict:  ['冲突（跳过）', 'st-warn'],
+  no_file:   ['无文件', 'st-dim'],
+  missing:   ['文件缺失', 'st-dim'],
+};
+
+const baseName = (p) => (p ? String(p).split(/[\\/]/).pop() : '');
+
+function fmtSize(n) {
+  if (!n) return '';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
+  return `${v.toFixed(i ? 1 : 0)} ${units[i]}`;
+}
+
+function statusCell(it) {
+  const [label, cls] = BATCH_STATUS[it.status] || [it.status, 'st-dim'];
+  const err = it.error && it.status !== 'unchanged'
+    ? `<br><span class="st-dim">${esc(it.error)}</span>` : '';
+  return `<span class="${cls}">${label}</span>${err}`;
+}
+
+function batchCb(it) {
+  return it.actionable
+    ? `<input type="checkbox" class="b-cb" data-id="${it.id}" checked>`
+    : '<input type="checkbox" disabled>';
+}
+
+function batchTable(headers, rows) {
+  return `<div style="max-height:46vh;overflow:auto;margin-top:6px">
+    <table class="mini">
+      <thead><tr><th><input id="b-all" type="checkbox" checked></th>
+        ${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+}
+
+function wireBatchAll() {
+  const all = $('#b-all');
+  if (all) all.onchange = () => $all('.b-cb').forEach(cb => { cb.checked = all.checked; });
+}
+
+function checkedBatchIds() {
+  return $all('.b-cb:checked').map(cb => Number(cb.dataset.id));
+}
+
+/** 执行批量操作并刷新界面（操作后**清空选择**，避免误操作）。 */
+async function runBatch(op, extra, label) {
+  const ids = checkedBatchIds();
+  if (!ids.length) { toast('未勾选任何条目', true); return; }
+  let r;
+  try {
+    r = await api(`/api/batch/${op}/apply`, {
+      method: 'POST', body: { ids, selected: ids, ...extra },
+    });
+  } catch (err) { toast(err.message, true); return; }
+
+  closeModal();
+  toast(`已${label} ${r.done.length} 本${r.failed.length ? `，失败 ${r.failed.length} 本` : ''}`,
+        r.failed.length > 0);
+  if (r.failed.length) console.warn('批量操作失败明细：', r.failed);
+
+  state.selected.clear();
+  state.anchor = null;
+  await loadList();
+  const alive = state.current && state.books.some(b => b.id === state.current.id);
+  if (alive) await selectBook(state.current.id);
+  else {
+    state.current = null;
+    $('#detail-form').classList.add('hidden');
+    $('#detail-empty').classList.remove('hidden');
+  }
+}
+
+/* ─────────────────────────────────────────── ① 批量重命名 */
+async function batchRename() {
+  const ids = [...state.selected];
+  let plan;
+  try {
+    plan = await api('/api/batch/rename/preview', { method: 'POST', body: { ids } });
+  } catch (err) { toast(err.message, true); return; }
+
+  const rows = plan.items.map(it => `<tr>
+      <td>${batchCb(it)}</td>
+      <td>${it.id}</td>
+      <td>${esc(it.title)}</td>
+      <td class="muted">${esc(baseName(it.old))}</td>
+      <td>${esc(it.new ? baseName(it.new) : '')}</td>
+      <td>${statusCell(it)}</td>
+    </tr>`).join('');
+
+  openModal('批量重命名预览',
+    `<p class="small">可改名 <b>${plan.actionable}</b> 本`
+    + `${plan.blocked ? `　跳过 ${plan.blocked} 本（冲突 / 已是规范名 / 无文件）` : ''}</p>`
+    + batchTable(['#', '书名', '旧文件名', '新文件名', '状态'], rows),
+    [{ label: '取消', onClick: closeModal },
+     { label: '执行重命名', primary: true, onClick: () => runBatch('rename', {}, '重命名') }]);
+  wireBatchAll();
+}
+
+/* ─────────────────────────────────────────── ② 批量移动 */
+function batchMove(prefillDest = '') {
+  openModal('批量移动到目录',
+    `<label class="small">目标目录
+       <input id="bm-dest" style="width:100%" value="${esc(prefillDest)}"
+              placeholder="D:\\Books\\已整理">
+     </label>
+     <p class="muted small" style="margin-top:10px">
+       选中的文件<b>保留原文件名</b>移动到该目录（目录必须已存在）。<br>
+       移出库根后，库内路径会自动改记为<b>绝对路径</b>。
+     </p>`,
+    [{ label: '取消', onClick: closeModal },
+     { label: '选择目录…', onClick: async () => {
+         const d = await pickFolder();
+         if (d) $('#bm-dest').value = d;
+       } },
+     { label: '预览', primary: true, onClick: () => batchMovePreview() }]);
+  setTimeout(() => { const el = $('#bm-dest'); if (el) el.focus(); }, 50);
+}
+
+async function batchMovePreview() {
+  const dest = ($('#bm-dest') ? $('#bm-dest').value : '').trim();
+  if (!dest) { toast('请填写目标目录', true); return; }
+
+  const ids = [...state.selected];
+  let plan;
+  try {
+    plan = await api('/api/batch/move/preview',
+      { method: 'POST', body: { ids, destination: dest } });
+  } catch (err) { toast(err.message, true); return; }
+
+  const rows = plan.items.map(it => `<tr>
+      <td>${batchCb(it)}</td>
+      <td>${it.id}</td>
+      <td>${esc(it.title)}</td>
+      <td class="muted">${esc(baseName(it.old))}</td>
+      <td>${esc(it.new || '')}</td>
+      <td>${fmtSize(it.size)}</td>
+      <td>${statusCell(it)}</td>
+    </tr>`).join('');
+
+  openModal('批量移动预览',
+    `<p class="small">目标 <b>${esc(dest)}</b>　将移动 <b>${plan.actionable}</b> 本`
+    + `（合计 ${fmtSize(plan.total_size)}）`
+    + `${plan.blocked ? `　跳过 ${plan.blocked} 本` : ''}</p>`
+    + batchTable(['#', '书名', '文件', '新位置', '大小', '状态'], rows),
+    [{ label: '返回', onClick: () => batchMove(dest) },
+     { label: '执行移动', primary: true,
+       onClick: () => runBatch('move', { destination: dest }, '移动') }]);
+  wireBatchAll();
+}
+
+/* ─────────────────────────────────────────── ③④ 批量删除 */
+async function batchDelete(withFiles) {
+  const ids = [...state.selected];
+  let plan;
+  try {
+    plan = await api('/api/batch/delete/preview',
+      { method: 'POST', body: { ids, with_files: withFiles } });
+  } catch (err) { toast(err.message, true); return; }
+
+  const rows = plan.items.map(it => `<tr>
+      <td>${batchCb(it)}</td>
+      <td>${it.id}</td>
+      <td>${esc(it.title)}</td>
+      <td class="muted">${withFiles ? esc(it.old || '') : ''}</td>
+      <td>${fmtSize(it.size)}</td>
+      <td>${statusCell(it)}</td>
+    </tr>`).join('');
+
+  const files = plan.items.filter(i => i.actionable).map(it =>
+    `<li>#${it.id}　${esc(it.title)}${withFiles && it.old
+      ? `　<span class="muted">${esc(it.old)}</span>` : ''}</li>`).join('');
+
+  const head = withFiles
+    ? `<h4>🔴 将删除文件本体 —— 送入回收站</h4>
+       <p class="small">共 <b>${plan.actionable}</b> 个文件，合计 <b>${fmtSize(plan.total_size)}</b>。
+         文件会送入<b>回收站</b>（可从回收站恢复），同时删除对应数据库记录。</p>`
+    : `<h4>⚠ 将删除数据库记录</h4>
+       <p class="small">共 <b>${plan.actionable}</b> 条记录将被删除。
+         磁盘上的文件<b>不会</b>被删除。</p>`;
+
+  openModal(withFiles ? '连文件删除（送回收站）' : '删除元数据（仅记录）',
+    `<div class="danger-box">${head}<ul>${files}</ul>
+       <label class="small" style="display:block;margin-top:10px">
+         <input id="bd-confirm" type="checkbox">
+         ${withFiles ? '我已确认这些文件不再需要' : '我已确认删除这些记录'}
+       </label>
+     </div>`
+    + batchTable(['#', '书名', '文件路径', '大小', '状态'], rows),
+    [{ label: '取消', onClick: closeModal },
+     { label: withFiles ? '删除文件（送回收站）' : '删除记录', danger: true,
+       onClick: () => batchDeleteRun(withFiles) }]);
+  wireBatchAll();
+}
+
+async function batchDeleteRun(withFiles) {
+  const box = $('#bd-confirm');
+  if (!box || !box.checked) { toast('请先勾选确认项', true); return; }
+  await runBatch('delete', { with_files: withFiles, confirm: true },
+                 withFiles ? '删除文件' : '删除记录');
+}
+
 /* ══════════════════════════════════════════════════════ 绑定 */
 function bind() {
   $('#btn-new').onclick = blankDetail;
@@ -849,6 +1139,14 @@ function bind() {
 
   $('#welcome-new').onclick = chooseAndCreateLibrary;
   $('#welcome-open').onclick = chooseAndOpenLibrary;
+
+  // 多选 + 批量操作
+  $('#sel-all').onchange = toggleSelectAll;
+  $('#btn-b-rename').onclick = batchRename;
+  $('#btn-b-move').onclick = () => batchMove();
+  $('#btn-b-delmeta').onclick = () => batchDelete(false);
+  $('#btn-b-delfile').onclick = () => batchDelete(true);
+  $('#btn-b-clear').onclick = clearSelection;
 }
 
 /** 启动流程：无书库 → 欢迎页；有书库 → 正常界面。 */

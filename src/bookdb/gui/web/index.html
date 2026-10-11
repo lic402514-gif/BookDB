@@ -42,10 +42,24 @@
       <span id="list-count" class="muted">—</span>
       <span id="lib-root" class="muted"></span>
     </div>
+
+    <!-- 批量操作条（有选择时才出现） -->
+    <div id="batch-bar" class="batch-bar hidden">
+      <span id="batch-count" class="muted"></span>
+      <button id="btn-b-rename"  class="ghost" title="按元数据规范化文件名">✎ 批量重命名</button>
+      <button id="btn-b-move"    class="ghost" title="把选中的文件移动到指定目录">📦 批量移动</button>
+      <button id="btn-b-delmeta" class="ghost" title="只删除数据库记录，文件保留">🗑 删除元数据</button>
+      <button id="btn-b-delfile" class="danger" title="删除文件本体（送回收站）">💥 连文件删除</button>
+      <button id="btn-b-clear"   class="ghost">✕ 取消选择</button>
+    </div>
+
     <div class="table-wrap">
       <table id="book-table">
         <thead>
-          <tr><th>ID</th><th>书名</th><th>作者</th><th>出版社</th><th>年份</th><th>CLC</th></tr>
+          <tr>
+            <th class="sel"><input id="sel-all" type="checkbox" title="全选 / 全不选（当前列表）"></th>
+            <th>ID</th><th>书名</th><th>作者</th><th>出版社</th><th>年份</th><th>CLC</th>
+          </tr>
         </thead>
         <tbody id="book-rows"></tbody>
       </table>

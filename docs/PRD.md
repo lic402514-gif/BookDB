@@ -1107,6 +1107,36 @@ GUI 只是**显式**维护「当前打开的是哪个 Library」，不再依赖 
 
 **P0 明确不做**：多 Library 同时打开、多窗口/多标签、全局数据库。
 
+------
+
+## 16.6 多选与批量操作
+
+GUI 列表支持**多选**（复选框 / `Ctrl+点击` 加选 / `Shift+点击` 区间 / 表头全选当前列表），
+选中后显示批量操作条。**CLI 不提供批量操作**（保持"一次一条 + 脚本化"的定位）。
+
+四种操作，**风险递增、确认强度不同**：
+
+| 操作 | 动什么 | 可逆性 |
+|---|---|---|
+| `rename` | 文件名 + `file_path`（按 §14.1 模板）| 可改回 |
+| `move` | 文件位置 + `file_path`（**保留原文件名**）| 可移回 |
+| `delete_meta` | 仅数据库记录（文件保留）| 不可逆 |
+| `delete_files` | 文件本体 + 记录（**送回收站**）| 回收站可恢复 |
+
+定稿规则：
+
+1. **一律先预览后执行** —— 逐条列出「旧 → 新 / 状态 / 文件大小」，支持勾选子集执行。
+2. **冲突不自动覆盖** —— 目标已存在、批次内多本同名、A 的新名正是 B 的旧名（连锁改名）
+   一律标记为 `conflict` 且**默认不勾选**；`overwrite` 需显式开启。
+   批次内互换名（A↔B）**不做拓扑排序**，标冲突交用户手动处理。
+3. **逐条独立** —— 一条失败不影响其余（不做全有全无事务），逐条回报结果。
+4. **删除双闸** —— 前端须勾确认框；**后端 `confirm` 缺失直接 400**。
+5. **绝不用永久删除** —— 删文件一律经 `send2trash` 送**回收站**；
+   未安装 send2trash 时**明确报错**，不提供静默永久删除的降级路径。
+6. **空字段语义** —— 移动出 `library_root` 后 `file_path` 按 §6.1 改记为绝对路径。
+
+接口见 §16 附录（`/api/batch/rename|move|delete/{preview,apply}`）。
+
 ```text
 BookDB.exe（或 book gui）
    ↓
@@ -1164,6 +1194,12 @@ POST   /api/enrich/save              确认后写入数据库
 POST   /api/enrich/batch/preview     批量补全：列出待补记录（不跑模型）
 POST   /api/enrich/batch/item        批量补全：对单条跑 VLM（不写库；GUI 逐条调用显示进度）
 POST   /api/enrich/batch/apply       批量补全：把复核后的若干条写回库
+POST   /api/batch/rename/preview     批量重命名：逐条计划（不碰文件）
+POST   /api/batch/rename/apply       批量重命名执行
+POST   /api/batch/move/preview       批量移动：逐条计划
+POST   /api/batch/move/apply         批量移动执行
+POST   /api/batch/delete/preview     批量删除：逐条计划（含文件大小）
+POST   /api/batch/delete/apply       批量删除执行（记录 / 记录+文件，**需 confirm:true**）
 POST   /api/scan/preview             扫描目录 → 建库计划（不写库）
 POST   /api/scan/apply               按勾选项批量建记录
 ```

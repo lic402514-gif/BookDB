@@ -26,6 +26,7 @@ from ..config import Config
 from ..paths import LibraryRootMissingError
 from ..paths import resolve as resolve_path
 from ..db import dao
+from ..services import batch as batch_service
 from ..services import books as book_service
 from ..services import citation as citation_service
 from ..services import enrich as enrich_service
@@ -405,6 +406,120 @@ def _h_rename_apply(config: Config, match, query, body) -> dict:
     return {"ok": True, "changed": plan.changed, "new_name": plan.new_name}
 
 
+# ══════════════════════════════════════════════════ 批量操作（多选）
+def _batch_ids(body) -> list[int]:
+    raw = (body or {}).get("ids")
+    if not isinstance(raw, list) or not raw:
+        raise ApiError("缺少 ids（要操作的记录 id 列表）", 400)
+    try:
+        return [int(i) for i in raw]
+    except (TypeError, ValueError) as exc:
+        raise ApiError("ids 必须是整数数组", 400) from exc
+
+
+def _batch_payload(plan) -> dict:
+    return {
+        "operation": plan.operation,
+        "items": [
+            {
+                "id": i.book_id, "title": i.title, "status": i.status,
+                "old": i.old, "new": i.new, "size": i.size,
+                "error": i.error, "actionable": i.actionable,
+            }
+            for i in plan.items
+        ],
+        "actionable": len(plan.actionable),
+        "blocked": len(plan.blocked),
+        "total_size": plan.total_size,
+    }
+
+
+def _selected(body) -> set[int] | None:
+    raw = (body or {}).get("selected")
+    if not isinstance(raw, list):
+        return None
+    return {int(i) for i in raw}
+
+
+def _h_batch_rename_preview(config: Config, match, query, body) -> dict:
+    with Context.open(config) as ctx:
+        try:
+            plan = batch_service.build_rename_plan(ctx, _batch_ids(body))
+        except batch_service.BatchError as exc:
+            raise ApiError(str(exc), 400) from exc
+    return _batch_payload(plan)
+
+
+def _h_batch_rename_apply(config: Config, match, query, body) -> dict:
+    body = dict(body or {})
+    ids = _batch_ids(body)
+    with Context.open(config) as ctx:
+        try:
+            plan = batch_service.build_rename_plan(ctx, ids)
+            return batch_service.apply_plan(
+                ctx, plan, selected=_selected(body), overwrite=bool(body.get("overwrite"))
+            )
+        except batch_service.BatchError as exc:
+            raise ApiError(str(exc), 400) from exc
+
+
+def _h_batch_move_preview(config: Config, match, query, body) -> dict:
+    body = dict(body or {})
+    dest = str(body.get("destination") or "").strip()
+    if not dest:
+        raise ApiError("缺少 destination（目标目录）", 400)
+    with Context.open(config) as ctx:
+        try:
+            plan = batch_service.build_move_plan(ctx, _batch_ids(body), dest)
+        except batch_service.BatchError as exc:
+            raise ApiError(str(exc), 400) from exc
+    return _batch_payload(plan)
+
+
+def _h_batch_move_apply(config: Config, match, query, body) -> dict:
+    body = dict(body or {})
+    dest = str(body.get("destination") or "").strip()
+    if not dest:
+        raise ApiError("缺少 destination（目标目录）", 400)
+    with Context.open(config) as ctx:
+        try:
+            plan = batch_service.build_move_plan(ctx, _batch_ids(body), dest)
+            return batch_service.apply_plan(
+                ctx, plan, selected=_selected(body), overwrite=bool(body.get("overwrite"))
+            )
+        except batch_service.BatchError as exc:
+            raise ApiError(str(exc), 400) from exc
+
+
+def _h_batch_delete_preview(config: Config, match, query, body) -> dict:
+    body = dict(body or {})
+    with_files = bool(body.get("with_files"))
+    with Context.open(config) as ctx:
+        try:
+            plan = batch_service.build_delete_plan(ctx, _batch_ids(body), with_files=with_files)
+        except batch_service.BatchError as exc:
+            raise ApiError(str(exc), 400) from exc
+    return _batch_payload(plan)
+
+
+def _h_batch_delete_apply(config: Config, match, query, body) -> dict:
+    """删除（记录 / 记录+文件）。**必须带 `confirm: true`** —— 后端第二道闸。"""
+    body = dict(body or {})
+    if not body.get("confirm"):
+        raise ApiError("删除操作需要 confirm=true（前端应已让用户明确确认）", 400)
+    with_files = bool(body.get("with_files"))
+    ids = _batch_ids(body)
+
+    with Context.open(config) as ctx:
+        try:
+            plan = batch_service.build_delete_plan(ctx, ids, with_files=with_files)
+            return batch_service.apply_plan(
+                ctx, plan, selected=_selected(body), confirm=True
+            )
+        except batch_service.BatchError as exc:
+            raise ApiError(str(exc), 400) from exc
+
+
 # ─────────────────────────────────────────────────────────── 版权页提取（VLM）
 def _h_enrich(config: Config, match, query, body) -> dict:
     body = body or {}
@@ -622,6 +737,12 @@ ROUTES = [
     ("POST", r"^/api/library/probe$", _h_library_probe),
     ("POST", r"^/api/library/create$", _h_library_create),
     # 注意：/api/library/open 不进本表 —— 它需要访问服务自身（见 _handle 的特殊路由）
+    ("POST", r"^/api/batch/rename/preview$", _h_batch_rename_preview),
+    ("POST", r"^/api/batch/rename/apply$", _h_batch_rename_apply),
+    ("POST", r"^/api/batch/move/preview$", _h_batch_move_preview),
+    ("POST", r"^/api/batch/move/apply$", _h_batch_move_apply),
+    ("POST", r"^/api/batch/delete/preview$", _h_batch_delete_preview),
+    ("POST", r"^/api/batch/delete/apply$", _h_batch_delete_apply),
     ("GET", r"^/api/books$", _h_list),
     ("POST", r"^/api/books$", _h_add),
     ("GET", r"^/api/books/(?P<id>\d+)$", _h_get),

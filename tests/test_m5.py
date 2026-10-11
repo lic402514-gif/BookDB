@@ -500,3 +500,94 @@ def test_enrich_batch_apply_writes_and_ignores_path(api):
 def test_enrich_batch_apply_rejects_empty(api):
     status, payload = api.call("POST", "/api/enrich/batch/apply", {"updates": []})
     assert status == 400 and "updates" in payload["error"]
+
+
+# ───────────────────────────────────────────────────── 批量操作（接口）
+def _lib_file(api, name: str, data: bytes = b"%PDF-1.4") -> Path:
+    path = Path(api.config.library_root) / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return path
+
+
+def test_batch_rename_preview_and_apply(api):
+    _lib_file(api, "旧名.pdf")
+    book = add(api, title="否定辩证法", file_path="旧名.pdf")
+
+    status, plan = api.call("POST", "/api/batch/rename/preview", {"ids": [book]})
+    assert status == 200 and plan["operation"] == "rename"
+    assert plan["actionable"] == 1
+    assert plan["items"][0]["status"] == "rename"
+    new_name = plan["items"][0]["new"].split("\\")[-1]
+
+    status, result = api.call("POST", "/api/batch/rename/apply", {"ids": [book]})
+    assert status == 200 and result["done"] == [book]
+
+    _s, got = api.call("GET", f"/api/books/{book}")
+    assert got["file_path"] == new_name
+    assert (Path(api.config.library_root) / new_name).is_file()
+
+
+def test_batch_rename_requires_ids(api):
+    status, payload = api.call("POST", "/api/batch/rename/preview", {})
+    assert status == 400 and "ids" in payload["error"]
+
+    status, payload = api.call("POST", "/api/batch/rename/preview", {"ids": [999]})
+    assert status == 400 and "不存在" in payload["error"]
+
+
+def test_batch_move_preview_and_apply(api, tmp_path):
+    _lib_file(api, "书.pdf")
+    book = add(api, title="待搬走", file_path="书.pdf", isbn="9780000000100")
+    dest = tmp_path / "moved"
+    dest.mkdir()
+
+    status, plan = api.call(
+        "POST", "/api/batch/move/preview", {"ids": [book], "destination": str(dest)}
+    )
+    assert status == 200 and plan["items"][0]["status"] == "move"
+
+    status, result = api.call(
+        "POST", "/api/batch/move/apply", {"ids": [book], "destination": str(dest)}
+    )
+    assert status == 200 and result["done"] == [book]
+    assert (dest / "书.pdf").is_file()
+
+    status, payload = api.call("POST", "/api/batch/move/preview", {"ids": [book]})
+    assert status == 400 and "destination" in payload["error"]
+
+
+def test_batch_delete_meta_endpoint(api):
+    path = _lib_file(api, "书.pdf")
+    book = add(api, title="待删记录", file_path="书.pdf", isbn="9780000000101")
+
+    status, plan = api.call(
+        "POST", "/api/batch/delete/preview", {"ids": [book], "with_files": False}
+    )
+    assert status == 200 and plan["operation"] == "delete_meta"
+
+    # 缺 confirm → 后端拒绝（第二道闸）
+    status, payload = api.call(
+        "POST", "/api/batch/delete/apply", {"ids": [book], "with_files": False}
+    )
+    assert status == 400 and "confirm" in payload["error"]
+
+    status, result = api.call(
+        "POST", "/api/batch/delete/apply",
+        {"ids": [book], "with_files": False, "confirm": True},
+    )
+    assert status == 200 and result["done"] == [book]
+    assert path.is_file()                      # 文件保留
+    status, _ = api.call("GET", f"/api/books/{book}")
+    assert status == 404
+
+
+def test_batch_delete_files_preview_reports_size(api):
+    _lib_file(api, "书.pdf", b"x" * 2048)
+    book = add(api, title="待删文件", file_path="书.pdf", isbn="9780000000102")
+
+    status, plan = api.call(
+        "POST", "/api/batch/delete/preview", {"ids": [book], "with_files": True}
+    )
+    assert status == 200 and plan["operation"] == "delete_files"
+    assert plan["total_size"] == 2048
