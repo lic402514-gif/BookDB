@@ -285,7 +285,7 @@ books.file_path
 
 ```text
 绝对路径：  D:\Books\否定辩证法.pdf
-            C:\Users\Lucian\Documents\books\资本论.pdf
+            C:\Users\YourName\Documents\books\资本论.pdf
 
 相对路径：  books\否定辩证法.pdf
             否定辩证法.pdf
