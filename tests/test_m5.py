@@ -374,3 +374,27 @@ def test_gui_file_path_absolute_outside_root_kept_absolute(api):
     book_id = add(api, title="外", file_path=str(p))
     _status, detail = api.call("GET", f"/api/books/{book_id}")
     assert detail["file_path"] == str(p)
+
+
+def test_edit_form_absolute_outside_root_kept_absolute(api):
+    """编辑表单（PUT）填入库根之外的绝对路径 → 原样保留。"""
+    book_id = add(api)
+    lib = Path(api.config.library_root)
+    p = lib.parent / "out.pdf"
+    p.write_bytes(b"%PDF-1.4")
+    status, _ = api.call("PUT", f"/api/books/{book_id}", {**SAMPLE, "file_path": str(p)})
+    assert status == 200
+    _s, detail = api.call("GET", f"/api/books/{book_id}")
+    assert detail["file_path"] == str(p), detail["file_path"]
+
+
+def test_edit_form_absolute_inside_root_becomes_relative(api):
+    """编辑表单填入库根内的绝对路径 → 归一化为相对（PRD §6.1 推荐用法）。"""
+    book_id = add(api)
+    lib = Path(api.config.library_root)
+    p = lib / "in.pdf"
+    p.write_bytes(b"%PDF-1.4")
+    status, _ = api.call("PUT", f"/api/books/{book_id}", {**SAMPLE, "file_path": str(p)})
+    assert status == 200
+    _s, detail = api.call("GET", f"/api/books/{book_id}")
+    assert detail["file_path"] == "in.pdf"
