@@ -12,6 +12,7 @@ dependencies = [
 gui = ["pywebview>=5.0"]
 pdf = ["PyMuPDF>=1.24"]
 dev = ["pytest>=8.0"]
+build = ["pyinstaller>=6.0"]      # 打包 BookDB.exe（P0 产品化）
 
 [project.scripts]
 book = "bookdb.main:main"
