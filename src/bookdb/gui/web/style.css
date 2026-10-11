@@ -59,6 +59,15 @@ button.ghost { background: transparent; }
 button:disabled { opacity: .4; cursor: not-allowed; }
 button:disabled:hover { background: var(--panel); border-color: var(--line); }
 
+/* ─────────────────────────────────── 弹层内的小表格（扫描预览等） */
+table.mini { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.mini th, table.mini td {
+  border-bottom: 1px solid var(--line); padding: 4px 6px; text-align: left;
+  max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+table.mini th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--panel); }
+table.mini thead th:first-child, table.mini tbody td:first-child { width: 24px; text-align: center; }
+
 /* ─────────────────────────────────────────── 高级筛选 */
 .filters {
   display: flex; flex-wrap: wrap; gap: 12px; align-items: center;

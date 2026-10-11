@@ -39,6 +39,13 @@ class JsApi:
         )
         return result[0] if result else None
 
+    def pick_folder(self) -> str | None:
+        """选择目录（扫描建库用）。"""
+        import webview
+
+        result = webview.windows[0].create_file_dialog(webview.FOLDER_DIALOG)
+        return result[0] if result else None
+
 
 def wait_ready(url: str, timeout: float = 5.0) -> bool:
     """轮询 /api/meta 直到服务就绪（避免 WebView 白屏）。"""

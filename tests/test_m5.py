@@ -407,3 +407,39 @@ def test_api_rejects_fullwidth_colon_path(api):
     )
     assert status == 400
     assert "全角" in payload["error"]
+
+
+# ─────────────────────────────────────────────────────── 扫描建库（接口）
+def test_scan_preview_and_apply(api):
+    lib = Path(api.config.library_root)
+    (lib / "改造的诞生 (王良卿著) (z-library.sk, 1lib.sk).pdf").write_bytes(b"%PDF-1.4")
+
+    status, plan = api.call("POST", "/api/scan/preview", {"directory": str(lib)})
+    assert status == 200
+    assert plan["total"] == 1 and plan["creatable"] == 1
+    assert plan["items"][0]["title"] == "改造的诞生"
+    assert plan["items"][0]["author"] == "王良卿"
+
+    status, result = api.call(
+        "POST", "/api/scan/apply", {"directory": str(lib), "selected": [0]}
+    )
+    assert status == 200 and result["created"] == 1
+
+    _s, listing = api.call("GET", "/api/books")
+    assert [b["title"] for b in listing["items"]] == ["改造的诞生"]
+
+
+def test_scan_preview_missing_directory(api):
+    status, payload = api.call(
+        "POST", "/api/scan/preview", {"directory": str(api.tmp / "nope")}
+    )
+    assert status == 400 and "不存在" in payload["error"]
+
+
+def test_scan_apply_empty_selection_creates_nothing(api):
+    lib = Path(api.config.library_root)
+    (lib / "oneday.pdf").write_bytes(b"%PDF-1.4")
+    status, result = api.call(
+        "POST", "/api/scan/apply", {"directory": str(lib), "selected": []}
+    )
+    assert status == 200 and result["created"] == 0

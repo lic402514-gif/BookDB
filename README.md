@@ -5,9 +5,10 @@
 > 定位：一个小型、可靠、本地优先的个人图书元数据库。
 > 核心保持简单，复杂能力（CLC 分类、摘要生成等）通过 JSON/CSV 标准接口向外扩展。
 
-## 特性（M1–M5 已完成）
+## 特性（M1–M5 + 扩展）
 
 - **图书管理**：`init` / `add` / `list` / `show` / `edit` / `delete`
+- **扫描建库**：`book scan <dir>` 扫描目录（递归），从**文件名**解析书名 / 作者 / 版次并批量建记录；先预览后写入
 - **检索**：关键词 + 作者 / 年份区间 / CLC 前缀 / 文献类型 / 出版社 / 是否有文件
 - **数据交换**：JSON / CSV 导入导出 + 字段级 patch（显式 `mode`、变更预览、NULL 语义）
 - **文件重命名**：按元数据生成规范化文件名，`--dry-run` 预览 / `--apply` 执行，同步更新库内路径
@@ -66,7 +67,11 @@ book enrich --pdf "book.pdf"           # 自动定位版权页
 book enrich --pdf "book.pdf" --page 5  # 手动指定页
 book enrich --image "copyright.jpg"    # 手动指定图片
 
-# 9. 桌面 GUI（列表 / 搜索 / 详情 / 编辑 / 导入导出 / 重命名 / 引用 / 版权页提取）
+# 9. 扫描目录批量建库（按文件名解析元数据；默认只预览）
+book scan "D:/Books" --recursive        # 预览：新建 / 已入库 / 疑似重复
+book scan "D:/Books" --apply --yes      # 确认后写库
+
+# 10. 桌面 GUI（列表 / 搜索 / 详情 / 编辑 / 导入导出 / 重命名 / 引用 / 版权页提取 / 扫描建库）
 book gui
 ```
 
@@ -128,6 +133,7 @@ uv pip install -e ".[pdf]"
 | M3 | 文件重命名 + GB/T 7714 引用（共用 `format.py`） | ✅ |
 | M4 | 本地 VLM 版权页提取（Ollama 适配） | ✅ |
 | M5 | pywebview GUI（内部 HTTP 端点） | ✅ |
+| 扩展 | 扫描目录批量建库（`book scan`，按文件名解析） | ✅ |
 
 完整需求见 [`docs/PRD.md`](docs/PRD.md)。
 

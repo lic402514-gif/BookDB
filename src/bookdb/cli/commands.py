@@ -1,6 +1,7 @@
 """CLI 命令（PRD §21）。
 
-P1：rename / cite / enrich / gui
+P0：init / add / list / show / edit / delete / search / import / export
+P1：rename / cite / enrich / scan / gui
 CLI 只负责参数解析、交互与呈现；业务逻辑一律走 services 层（PRD §17）。
 """
 
@@ -23,6 +24,7 @@ from ..services import citation as citation_service
 from ..services import enrich as enrich_service
 from ..services import import_export as ie
 from ..services import rename as rename_service
+from ..services import scan as scan_service
 from ..services import search as search_service
 from ..services import setup as setup_service
 from ..services.context import Context
@@ -691,6 +693,75 @@ def enrich(
 
     title = result.metadata.get("title") or "（无书名）"
     console.print(f"[green]✓[/green] 已写入：#{book_id} 《{title}》")
+
+
+# ══════════════════════════════════════════════════ 扫描建库（PRD 扩展）
+@app.command()
+def scan(
+    ctx: typer.Context,
+    directory: Path = typer.Argument(..., help="要扫描的目录"),
+    recursive: bool = typer.Option(True, "--recursive/--no-recursive", help="是否递归子目录"),
+    apply: bool = typer.Option(False, "--apply", help="确认后写库（默认仅预览）"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认"),
+) -> None:
+    """扫描目录，按文件名解析元数据并批量建记录。
+
+    默认只预览（PRD §10 / §12.5 精神：先给变更预览，确认后才写库）。
+    """
+    with _open(ctx) as octx:
+        try:
+            plan = scan_service.build_plan(octx, directory, recursive=recursive)
+        except scan_service.DirectoryNotFoundError as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1)
+
+        console.print(f"目录：[bold]{plan.directory}[/bold]")
+        console.print(
+            f"发现 [bold]{plan.total_files}[/bold] 个文件"
+            f"（其中 {plan.skipped_existing} 个已入库，将跳过）\n"
+        )
+
+        table = Table()
+        table.add_column("#", justify="right", style="dim")
+        table.add_column("状态")
+        table.add_column("书名", overflow="fold")
+        table.add_column("作者")
+        table.add_column("年")
+        table.add_column("文件名", overflow="fold")
+        for cand in plan.candidates:
+            if cand.error:
+                status, title, author, year = "[red]错误[/red]", cand.error[:30], "", ""
+            elif cand.already:
+                status = "[dim]已存在[/dim]"
+                title = cand.already.get("title") or ""
+                author = cand.already.get("author") or ""
+                year = str(cand.already.get("publication_year") or "")
+            else:
+                status = "[yellow]疑似重复[/yellow]" if cand.duplicates else "[green]新建[/green]"
+                title = cand.meta.get("title") or ""
+                author = cand.meta.get("author") or ""
+                year = str(cand.meta.get("publication_year") or "")
+            table.add_row(str(cand.index), status, title, author, year, cand.path.name)
+        console.print(table)
+        console.print(
+            f"\n可新建：[green]{plan.new_count}[/green] 条"
+            f"　　疑似重复：[yellow]{plan.dup_count}[/yellow] 条"
+        )
+
+        if not apply:
+            console.print("[dim]（预览模式：未写入。确认无误后加 --apply 写库）[/dim]")
+            raise typer.Exit(code=0)
+        if plan.new_count == 0:
+            console.print("[yellow]没有可新建的记录。[/yellow]")
+            raise typer.Exit(code=0)
+        if not yes and not typer.confirm(f"确认新建 {plan.new_count} 条记录？", default=False):
+            console.print("[dim]已取消。[/dim]")
+            raise typer.Exit(code=0)
+
+        result = scan_service.apply_plan(octx, plan)
+        console.print(
+            f"[green]✓[/green] 已新建 {result.created_count} 条，跳过 {result.skipped} 条。"
+        )
 
 
 # ══════════════════════════════════════════════════════════════ GUI (M5)

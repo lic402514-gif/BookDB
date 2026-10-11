@@ -30,6 +30,7 @@ from ..services import citation as citation_service
 from ..services import enrich as enrich_service
 from ..services import import_export as ie
 from ..services import rename as rename_service
+from ..services import scan as scan_service
 from ..services import search as search_service
 from ..services.context import Context
 from ..services.llm import ModelUnavailableError
@@ -324,6 +325,66 @@ def _h_enrich_save(config: Config, match, query, body) -> dict:
     return {"id": book_id}
 
 
+# ─────────────────────────────────────────────────── 扫描建库（预览 / 执行）
+def _h_scan_preview(config: Config, match, query, body) -> dict:
+    body = dict(body or {})
+    directory = (body.get("directory") or "").strip()
+    if not directory:
+        raise ApiError("缺少扫描目录", 400)
+    recursive = bool(body.get("recursive", True))
+
+    with Context.open(config) as ctx:
+        try:
+            plan = scan_service.build_plan(ctx, directory, recursive=recursive)
+        except scan_service.DirectoryNotFoundError as exc:
+            raise ApiError(str(exc), 400) from exc
+
+    return {
+        "directory": str(plan.directory),
+        "total": plan.total_files,
+        "skipped": plan.skipped_existing,
+        "creatable": plan.new_count,
+        "duplicates": plan.dup_count,
+        "items": [
+            {
+                "index": c.index,
+                "name": c.path.name,
+                "creatable": c.creatable,
+                "already": bool(c.already),
+                "duplicates": len(c.duplicates),
+                "error": c.error,
+                "title": c.meta.get("title") or (c.already or {}).get("title") or "",
+                "author": c.meta.get("author") or (c.already or {}).get("author") or "",
+                "year": str(c.meta.get("publication_year")
+                            or (c.already or {}).get("publication_year") or ""),
+            }
+            for c in plan.candidates
+        ],
+    }
+
+
+def _h_scan_apply(config: Config, match, query, body) -> dict:
+    body = dict(body or {})
+    directory = (body.get("directory") or "").strip()
+    if not directory:
+        raise ApiError("缺少扫描目录", 400)
+    recursive = bool(body.get("recursive", True))
+    raw_sel = body.get("selected")
+    selected = {int(i) for i in raw_sel} if raw_sel is not None else None
+
+    with Context.open(config) as ctx:
+        try:
+            plan = scan_service.build_plan(ctx, directory, recursive=recursive)
+        except scan_service.DirectoryNotFoundError as exc:
+            raise ApiError(str(exc), 400) from exc
+        try:
+            result = scan_service.apply_plan(ctx, plan, selected=selected)
+        except ValueError as exc:
+            raise ApiError(str(exc), 400) from exc
+
+    return {"created": result.created_count, "skipped": result.skipped, "ids": result.created}
+
+
 # ═══════════════════════════════════════════════════════════════════ 路由表
 ROUTES = [
     ("GET", r"^/api/meta$", _h_meta),
@@ -343,6 +404,8 @@ ROUTES = [
     ("POST", r"^/api/rename/(?P<id>\d+)/apply$", _h_rename_apply),
     ("POST", r"^/api/enrich$", _h_enrich),
     ("POST", r"^/api/enrich/save$", _h_enrich_save),
+    ("POST", r"^/api/scan/preview$", _h_scan_preview),
+    ("POST", r"^/api/scan/apply$", _h_scan_apply),
 ]
 _COMPILED = [(m, re.compile(p), h) for m, p, h in ROUTES]
 

@@ -1132,6 +1132,8 @@ GET    /api/rename/{id}              重命名预览
 POST   /api/rename/{id}/apply        重命名执行
 POST   /api/enrich                   版权页提取（模型输出，不写库）
 POST   /api/enrich/save              确认后写入数据库
+POST   /api/scan/preview             扫描目录 → 建库计划（不写库）
+POST   /api/scan/apply               按勾选项批量建记录
 ```
 
 ------
@@ -1279,6 +1281,7 @@ book export
 book rename
 book cite
 book enrich
+book scan
 book gui
 ```
 
@@ -1304,8 +1307,12 @@ export
 rename
 cite
 enrich
+scan
 gui
 ```
+
+`book scan <dir>` 扫描目录（默认递归），从**文件名**解析书名 / 作者 / 版次并生成建库计划；
+默认**只预览**，`--apply` 才写库（先预览后写入，与 §10 导入预览一致）。
 
 ------
 
@@ -1491,7 +1498,6 @@ isbn13
 - SQLite FTS5；
 - BibTeX；
 - RIS；
-- 批量扫描目录；
 - 多文件关联；
 - OCR；
 - 在线 ISBN 查询；
@@ -1502,6 +1508,9 @@ isbn13
 - 多用户；
 - 阅读器；
 - 独立 Web 服务。
+
+> **例外（已实现）**：原列于此的「**批量扫描目录**」已作为后续迭代加入 —— 见 §21 `book scan`
+> 与 §16 的 `/api/scan/*` 接口。它按**文件名解析**元数据，先预览再写入，不调用模型。
 
 其中：
 

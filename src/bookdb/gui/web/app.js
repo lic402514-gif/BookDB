@@ -416,6 +416,96 @@ async function saveEnrich() {
   }
 }
 
+/* ══════════════════════════════════════════════════════ 扫描建库 */
+async function pickFolder() {
+  if (window.pywebview && window.pywebview.api && window.pywebview.api.pick_folder) {
+    return await window.pywebview.api.pick_folder();
+  }
+  return prompt('输入要扫描的目录（完整路径）：');
+}
+
+function doScan(prefillDir = '') {
+  openModal('扫描目录建库',
+    `<label class="small">目录
+       <input id="scan-dir" placeholder="E:\\Books" style="width:100%" value="${esc(prefillDir)}">
+     </label>
+     <label class="small" style="display:flex;gap:6px;align-items:center;margin-top:10px">
+       <input id="scan-rec" type="checkbox" checked> 递归子目录
+     </label>
+     <p class="muted small" style="margin-top:10px">
+       扫描目录下的 PDF，从<b>文件名</b>解析书名 / 作者 / 版次，先预览再写入。<br>
+       已入库的文件（按路径比对）自动跳过；书名 + 作者相同者标为「疑似重复」。
+     </p>`,
+    [{ label: '取消', onClick: closeModal },
+     { label: '选择目录…', onClick: async () => {
+         const dir = await pickFolder();
+         if (dir) $('#scan-dir').value = dir;
+       } },
+     { label: '预览', primary: true, onClick: () => previewScan() }]);
+  setTimeout(() => { const el = $('#scan-dir'); if (el) el.focus(); }, 50);
+}
+
+async function previewScan() {
+  const dirEl = $('#scan-dir');
+  const directory = dirEl ? dirEl.value.trim() : '';
+  if (!directory) { toast('请填写要扫描的目录', true); return; }
+  const recursive = $('#scan-rec') ? $('#scan-rec').checked : true;
+
+  let plan;
+  try {
+    plan = await api('/api/scan/preview', { method: 'POST', body: { directory, recursive } });
+  } catch (err) { toast(err.message, true); return; }
+
+  if (!plan.items.length) {
+    openModal('扫描结果',
+      `<p class="muted">目录 <b>${esc(plan.directory)}</b> 下没有找到 PDF。</p>`,
+      [{ label: '返回', onClick: () => doScan(directory) }, { label: '关闭', onClick: closeModal }]);
+    return;
+  }
+
+  const rows = plan.items.map(it => {
+    const st = it.error ? '<span style="color:#b3261e">错误</span>'
+      : it.already ? '<span class="muted">已入库</span>'
+      : it.duplicates ? '<span style="color:#b8860b">疑似重复</span>'
+      : '<span style="color:#1b7a5a">新建</span>';
+    const cb = it.creatable
+      ? `<input type="checkbox" class="scan-cb" data-idx="${it.index}" checked>`
+      : '<input type="checkbox" disabled>';
+    return `<tr><td>${cb}</td><td>${it.index}</td><td>${st}</td>
+      <td>${esc(it.title)}</td><td>${esc(it.author)}</td><td>${esc(it.year)}</td>
+      <td class="muted">${esc(it.error || it.name)}</td></tr>`;
+  }).join('');
+
+  openModal('扫描预览',
+    `<p class="small">目录 <b>${esc(plan.directory)}</b>
+       　发现 ${plan.total} 个文件（${plan.skipped} 个已入库）
+       　可新建 <b>${plan.creatable}</b>
+       ${plan.duplicates ? `　<span style="color:#b8860b">疑似重复 ${plan.duplicates}</span>` : ''}</p>
+     <div style="max-height:46vh;overflow:auto;margin-top:6px">
+       <table class="mini">
+         <thead><tr><th><input id="scan-all" type="checkbox" checked title="全选 / 全不选"></th>
+           <th>#</th><th>状态</th><th>书名</th><th>作者</th><th>年</th><th>文件</th></tr></thead>
+         <tbody>${rows}</tbody>
+       </table>
+     </div>`,
+    [{ label: '返回', onClick: () => doScan(directory) },
+     { label: '建立记录', primary: true, onClick: () => applyScan(directory, recursive) }]);
+
+  const all = $('#scan-all');
+  if (all) all.onchange = () => $all('.scan-cb').forEach(cb => { cb.checked = all.checked; });
+}
+
+async function applyScan(directory, recursive) {
+  const selected = $all('.scan-cb:checked').map(cb => Number(cb.dataset.idx));
+  if (!selected.length) { toast('未勾选任何条目', true); return; }
+  try {
+    const r = await api('/api/scan/apply', { method: 'POST', body: { directory, recursive, selected } });
+    closeModal();
+    toast(`已新建 ${r.created} 条记录${r.skipped ? `，跳过 ${r.skipped} 条` : ''}`);
+    await loadList();
+  } catch (err) { toast(err.message, true); }
+}
+
 /* ══════════════════════════════════════════════════════ 搜索 */
 let searchTimer = null;
 function scheduleSearch() {
@@ -454,6 +544,7 @@ function clearFilters() {
 /* ══════════════════════════════════════════════════════ 绑定 */
 function bind() {
   $('#btn-new').onclick = blankDetail;
+  $('#btn-scan').onclick = () => doScan();
   $('#btn-import').onclick = pickImportFile;
   $('#btn-export').onclick = exportData;
   $('#btn-enrich').onclick = doEnrich;

@@ -240,5 +240,27 @@ def find_duplicates(
     return [dict(r) for r in rows]
 
 
+def find_same_title_author(
+    conn: sqlite3.Connection,
+    *,
+    title: str,
+    author: str | None,
+) -> list[dict]:
+    """按「书名 + 作者」精确匹配（**忽略年份**）。
+
+    用于扫描建库时的重复提示 —— 扫描场景下年份常常拿不到，
+    而 `find_duplicates` 要求年份也相等，会漏判。
+    """
+    if not title:
+        return []
+    rows = conn.execute(
+        f"SELECT {schema.LIST_COLUMNS} FROM books b "
+        f"LEFT JOIN publishers p ON p.id = b.publisher_id "
+        f"WHERE b.title = ? AND IFNULL(b.author,'') = IFNULL(?,'')",
+        (title, author),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def count_books(conn: sqlite3.Connection) -> int:
     return int(conn.execute("SELECT COUNT(*) AS c FROM books").fetchone()["c"])
