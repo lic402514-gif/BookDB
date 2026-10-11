@@ -17,25 +17,30 @@ from ..llm.base import ModelUnavailableError, VLMAdapter
 from ..normalize import normalize_edition, normalize_isbn, normalize_year
 
 #: 字段清单即为要提取的全部内容；不得要求模型猜测（§12.4）
-PROMPT = """你是图书版权页信息提取助手。请从这张版权页图片中提取书目信息。
+#:
+#: 提示词要点（实测得出，勿删）：
+#:   1. 先**判定是不是版权页** —— 非版权页一律输出全 null。否则模型会从序言/正文里
+#:      **捏造**出版社和年份（旧提示词实测会在「主编序」页编出 出版社/年份）。
+#:   2. `publication_place` 只要城市 —— 否则模型会把出版社**详细地址**当真（实测）。
+#:   3. 民国纪年必须换算公元（民國99年 → 2010）—— 否则模型会输出 1999（实测）。
+PROMPT = """你要判断这张图书页面**是不是版权页**，并从版权页中提取书目信息。
 
-只输出一个 JSON 对象，不要任何解释文字、不要 markdown 代码块。
+判断标准：版权页含「图书在版编目(CIP)数据」「ISBN」「出版者/出版社」「版次/印次」等出版信息。
+如果这一页不是版权页（例如书名页、序言、目录、正文、后记），**所有字段一律输出 null**，
+绝对不要从正文里猜测出版社或年份。
 
 字段说明：
-- title: 书名（字符串）
-- author: 作者（字符串数组）
-- translator: 译者（字符串数组）
-- publisher: 出版社（字符串）
-- publication_place: 出版地（字符串）
-- publication_year: 出版年份（整数）
-- edition: 版次（字符串，如 "1"）
-- isbn: ISBN（字符串）
+- title: 书名；author: 作者数组；translator: 译者数组
+- publisher: 出版社名称；publication_place: 出版地**只填城市**（如 北京、臺北），不要填详细地址
+- publication_year: 出版年份，**公元纪年整数**。若原书用民国纪年（如「民國99年」「中華民國九十九年」），
+  必须换算为公元年（民国年 + 1911），例如 民國99年 → 2010
+- edition: 版次（字符串，初版填 "1"）；isbn: ISBN 字符串
 
-无法确定的字段一律输出 null，**绝对不要猜测**。
+无法确定的字段输出 null。**绝对不要猜测。**
 
-示例输出：
-{"title": "否定辩证法", "author": ["阿多尔诺"], "translator": ["王凤才"], "publisher": "商务印书馆", "publication_place": "北京", "publication_year": 2019, "edition": "1", "isbn": "9787100163180"}
-"""
+只输出一个 JSON 对象，不要解释、不要 markdown 围栏。
+
+示例（非版权页）：{"title": null, "author": null, "translator": null, "publisher": null, "publication_place": null, "publication_year": null, "edition": null, "isbn": null}"""
 
 _FENCED = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _OBJECT = re.compile(r"\{.*\}", re.DOTALL)
@@ -122,3 +127,23 @@ def extract_metadata(vlm: VlmConfig, image: bytes) -> dict:
     adapter = get_adapter(vlm)
     raw = adapter.describe_image(image, PROMPT)
     return parse_metadata(raw)
+
+
+# ------------------------------------------------------------ 结果判定 / 合并
+def looks_like_copyright(meta: dict) -> bool:
+    """判断提取结果是否来自**真正的版权页**（而非封面/正文的偶然命中）。
+
+    判据：有 ISBN，或同时有 出版社 + 书名。
+    """
+    return bool(meta.get("isbn") or (meta.get("publisher") and meta.get("title")))
+
+
+def merge_metadata(base: dict, fill: dict) -> dict:
+    """合并两次提取：`base` 非空的字段优先，缺失的用 `fill` 补。
+
+    用途：封面通常有书名/作者但无 ISBN，版权页有 ISBN/年份 —— 两者合并得到完整记录。
+    """
+    return {
+        key: (base.get(key) if base.get(key) is not None else fill.get(key))
+        for key in _FIELDS
+    }

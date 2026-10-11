@@ -92,6 +92,35 @@ def _make_pdf(path: Path, pages: list[str]) -> None:
     doc.close()
 
 
+def _blank_pdf(path: Path, pages: int) -> None:
+    """生成**无文本层**的 PDF —— 模拟扫描件。"""
+    fitz = _pymupdf()
+    doc = fitz.open()
+    for _ in range(pages):
+        doc.new_page()
+    doc.save(str(path))
+    doc.close()
+
+
+class _ScriptedAdapter:
+    """按调用次序回放不同文本，模拟"逐页翻看"（封面 → 空白 → 版权页）。"""
+
+    def __init__(self, replies: list[str]):
+        self.replies = replies
+        self.calls = 0
+
+    def describe_image(self, image: bytes, prompt: str) -> str:
+        reply = self.replies[min(self.calls, len(self.replies) - 1)]
+        self.calls += 1
+        return reply
+
+
+_NULL_JSON = (
+    '{"title":null,"author":null,"translator":null,"publisher":null,'
+    '"publication_place":null,"publication_year":null,"edition":null,"isbn":null}'
+)
+
+
 def test_locate_copyright_page(tmp_path: Path):
     path = tmp_path / "book.pdf"
     _make_pdf(path, ["chapter one", "chapter two", "x", "y", "ISBN 978-7-100-16318-0"])
@@ -163,14 +192,57 @@ def test_enrich_from_pdf_manual_page(tmp_path: Path, monkeypatch):
 
 
 def test_enrich_from_pdf_no_copyright_page(tmp_path: Path, monkeypatch):
+    """逐页扫描后仍一无所获（模型每页都回全 null）→ 明确报错，不猜。"""
     lib = tmp_path / "lib"
     lib.mkdir()
     path = lib / "plain.pdf"
     _make_pdf(path, ["hello", "world"])
 
-    monkeypatch.setattr(llm_service, "get_adapter", lambda vlm: _FakeAdapter('{"title":"x"}'))
+    monkeypatch.setattr(llm_service, "get_adapter", lambda vlm: _FakeAdapter(_NULL_JSON))
     with pytest.raises(enrich_service.CopyrightPageNotFound):
         enrich_service.enrich_from_pdf(_config(tmp_path), path)
+
+
+# ────────────────────────────────── 扫描件：逐页渲染 + 合并（PRD §12 扩展）
+def test_enrich_scanned_pdf_scans_pages_and_merges(tmp_path: Path, monkeypatch):
+    """扫描件（无文本层）：逐页喂 VLM；封面补书名/作者，版权页补 ISBN/年份，命中即停。"""
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    path = lib / "scan.pdf"
+    _blank_pdf(path, 5)                                   # 无文本层 → 关键词定位必失败
+
+    adapter = _ScriptedAdapter([
+        '{"title":"改造的誕生","author":["王良卿"]}',        # p1 封面
+        _NULL_JSON,                                          # p2 空白
+        '{"publisher":"國立政治大學歷史學系","publication_place":"臺北市",'
+        '"publication_year":2010,"isbn":"9789860232028"}',   # p3 版权页
+    ])
+    monkeypatch.setattr(llm_service, "get_adapter", lambda vlm: adapter)
+
+    result = enrich_service.enrich_from_pdf(_config(tmp_path), path)
+
+    assert result.page == 3
+    assert result.metadata["title"] == "改造的誕生"                    # 来自封面
+    assert result.metadata["author"] == "王良卿"
+    assert result.metadata["publisher"] == "國立政治大學歷史學系"       # 来自版权页
+    assert result.metadata["publication_year"] == 2010
+    assert result.metadata["isbn"] == "9789860232028"
+    assert adapter.calls == 3                             # 命中 ISBN 即停，不扫满 8 页
+
+
+def test_enrich_scanned_pdf_gives_up_after_scan(tmp_path: Path, monkeypatch):
+    """扫描件扫满前 N 页仍无内容 → 报错（并已渲染全部候选页）。"""
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    path = lib / "blank.pdf"
+    _blank_pdf(path, 3)
+
+    adapter = _ScriptedAdapter([_NULL_JSON])
+    monkeypatch.setattr(llm_service, "get_adapter", lambda vlm: adapter)
+
+    with pytest.raises(enrich_service.CopyrightPageNotFound):
+        enrich_service.enrich_from_pdf(_config(tmp_path), path)
+    assert adapter.calls == 3                             # 3 页全试过才放弃
 
 
 # ───────────────────────────────────────────── 模型不可用 → 明确报错
