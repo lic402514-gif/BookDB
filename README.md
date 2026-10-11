@@ -1,11 +1,56 @@
-# bookdb
+# BookDB
 
-本地优先、单用户的**个人图书元数据数据库工具**。SQLite + CLI，可选桌面 WebView。
+本地优先的**个人图书元数据管理工具** —— 把你电脑里的电子书整理成结构化的书目数据
+（书名 / 作者 / 译者 / 出版社 / 年份 / ISBN / CLC 分类…）。
 
-> 定位：一个小型、可靠、本地优先的个人图书元数据库。
-> 核心保持简单，复杂能力（CLC 分类、摘要生成等）通过 JSON/CSV 标准接口向外扩展。
+数据**完全存在你自己的电脑上**，不联网、不上传、不需要注册。
 
-## 特性（M1–M5 + 扩展）
+---
+
+## ⬇️ 下载安装（普通用户）
+
+**支持 Windows 10 / 11（64 位）。不需要 Python、uv、pip、Git 或任何其他环境。**
+
+### 方式一：安装版（推荐）
+
+1. 打开 **[最新版本 Releases](../../releases/latest)**
+2. 下载 **`BookDB-0.1.0-Setup.exe`**
+3. **双击**运行，一路「下一步」→「完成」
+4. 从**开始菜单**或**桌面快捷方式**启动 BookDB
+5. 首次启动会看到欢迎页 → 点「**新建 Library**」，选一个目录存放你的电子书
+
+> 安装过程无需管理员权限；界面所需的 Microsoft WebView2 运行环境
+> 若缺失，安装程序会**自动处理**，你不必做任何额外配置。
+
+### 方式二：便携版（免安装）
+
+1. 下载 **`BookDB-0.1.0-win64.zip`**
+2. 解压到任意位置（例如 `D:\Tools\BookDB`）
+3. 双击其中的 **`BookDB.exe`**
+
+适合放在 U 盘或不想安装的场景。
+
+### 🔒 你的数据在哪
+
+BookDB 把「程序」和「你的书库」**彻底分开**：
+
+| | 位置 | 说明 |
+|---|---|---|
+| **程序** | 安装目录（方式一）或你解压的目录（方式二）| —— |
+| **书库** | **由你在首次启动时自己选** | 一个目录 = 一个书库，含 `book.db` + 你的电子书 |
+| 应用设置 | `%APPDATA%\BookDB\settings.json` | 只记「最近打开的书库」，不含书籍数据 |
+
+- **卸载 BookDB 不会删除你的书库数据**；
+- 想备份？直接拷贝整个书库目录即可；
+- 想建多个书库（如「藏书」「论文」）？各自选目录，互不影响。
+
+---
+
+## 从源码运行（开发者）
+
+> 以下内容**只对想改代码的人**有意义。普通用户请用上面的安装包。
+
+### 特性
 
 - **图书管理**：`init` / `add` / `list` / `show` / `edit` / `delete`
 - **扫描建库**：`book scan <dir>` 扫描目录（递归），从**文件名**解析书名 / 作者 / 版次并批量建记录；先预览后写入
@@ -16,8 +61,8 @@
 - **引用输出**：GB/T 7714-2015 专著（`book cite`）；版本项按国标 —— 第 1 版不著录，其余写作 `2版`
 - **版权页提取**：本地 VLM（Ollama）从版权页图像提取元数据，人工确认后写入；**支持扫描件**（无文本层时逐页渲染喂 VLM）
 - **桌面 GUI**：pywebview + 原生 HTML/CSS/JS，内部仅 127.0.0.1 的 HTTP 端点，不对外暴露
-- **独立桌面入口（P0）**：`BookDB` 自带 GUI 入口，不经 CLI；程序、应用设置、用户数据三者分离
-- **Library 管理（P0）**：GUI 自己维护「当前书库」——首次启动显示欢迎页（新建 / 打开 / 最近使用），自动打开上次书库，支持运行中切换
+- **独立桌面入口**：`BookDB` 自带 GUI 入口，不经 CLI；程序、应用设置、用户数据三者分离
+- **Library 管理**：GUI 自己维护「当前书库」——首次启动显示欢迎页（新建 / 打开 / 最近使用），自动打开上次书库，支持运行中切换
 - **多选 + 批量操作**：列表多选（复选框 / Ctrl / Shift / 全选）后批量**重命名 / 移动 / 删除元数据 / 连文件删除**；一律**先预览后执行**，删除文件**送回收站**（可恢复）
 - **打开文件**：GUI 里一键用系统默认程序打开关联的电子书 / 定位到所在文件夹（不内嵌阅读器）
 - **字段规范化**：版次存纯数字（`第2版`→`2`）、ISBN 去连字符、年份容错
@@ -25,15 +70,28 @@
 - **文件路径**：绝对路径原样 / 相对路径按 `library_root` 解析
 - 纯标准库 `sqlite3`，**无 ORM**
 
-## 安装
+### 开发环境
 
 ```bash
-cd D:/Projects/book_metadata_tool
+git clone https://github.com/lic402514-gif/BookDB.git
+cd BookDB
 uv venv
-uv pip install -e ".[gui,pdf]"    # 只要 CLI 可省去 gui/pdf
+uv pip install -e ".[gui,pdf,dev]"    # 只要 CLI 可省去 gui/pdf
+uv run pytest -q                       # 185 passed
 ```
 
-## 快速开始
+### 打包（生成 Release 产物）
+
+```bash
+uv pip install -e ".[build]"
+bash packaging/build.sh          # → dist/BookDB/BookDB.exe
+bash packaging/make_zip.sh       # → dist/BookDB-<版本>-win64.zip（便携版）
+bash packaging/make_installer.sh # → dist/BookDB-<版本>-Setup.exe（需 Inno Setup 6）
+```
+
+安装包脚本见 `packaging/installer.iss`；图标由 `packaging/make_icon.py` 用标准库生成。
+
+### CLI 用法
 
 ```bash
 # 1. 初始化（数据库 + book.toml）
@@ -197,12 +255,6 @@ uv pip install -e ".[pdf]"
 | 扩展 | 扫描目录批量建库（`book scan`，按文件名解析） | ✅ |
 
 完整需求见 [`docs/PRD.md`](docs/PRD.md)。
-
-## 测试
-
-```bash
-uv run pytest -q
-```
 
 ## 许可证
 

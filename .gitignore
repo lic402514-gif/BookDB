@@ -23,3 +23,7 @@ book.toml
 .vscode/
 .DS_Store
 Thumbs.db
+
+# 打包中间产物（bootstrapper 由脚本按需下载；图标由脚本生成）
+packaging/bootstrapper/
+packaging/assets/bookdb.ico
