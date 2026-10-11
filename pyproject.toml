@@ -16,6 +16,10 @@ dev = ["pytest>=8.0"]
 [project.scripts]
 book = "bookdb.main:main"
 
+#: GUI 独立入口 —— `BookDB.exe` 的入口（P0 产品化：普通用户无需经过 CLI）
+[project.gui-scripts]
+BookDB = "bookdb.gui.main:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

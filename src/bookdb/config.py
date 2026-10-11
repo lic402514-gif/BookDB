@@ -84,17 +84,21 @@ class Config:
         """实际使用的配置文件路径（未指定则落在当前目录）。"""
         return self.config_path or (Path.cwd() / CONFIG_FILENAME)
 
-    def save(self) -> Path:
-        """把当前配置写回 book.toml（init 时调用）。"""
+    def save(self, *, base: Path | None = None) -> Path:
+        """把当前配置写回 book.toml（init / 新建 Library 时调用）。
+
+        `base` 给定时，落在其下的路径写成**相对路径**（便于整库整体搬迁）；
+        默认 `None` 保持原样，**不影响既有 CLI 行为**。
+        """
         path = self.effective_config_path
         lines = [
             "# bookdb 配置文件（由 `book init` 生成）",
             "",
             "[paths]",
-            f'library_root = "{_toml_escape(self.library_root)}"'
+            f'library_root = "{_toml_escape(_rel(self.library_root, base))}"'
             if self.library_root
             else 'library_root = ""',
-            f'db_path = "{_toml_escape(self.db_path)}"',
+            f'db_path = "{_toml_escape(_rel(self.db_path, base))}"',
             "",
             "[vlm]",
             f'endpoint = "{self.vlm.endpoint}"',
@@ -114,5 +118,17 @@ def _resolve(base: Path, value: str) -> Path:
     return (base / p).resolve()
 
 
-def _toml_escape(value: Path) -> str:
+def _rel(value: Path | None, base: Path | None) -> Path | str:
+    """`base` 给定时，落在 `base` 之下的路径转为相对路径；否则原样返回。"""
+    if value is None:
+        return ""
+    if base is None:
+        return value
+    try:
+        return value.resolve().relative_to(base.resolve())
+    except (ValueError, OSError):
+        return value
+
+
+def _toml_escape(value: Path | str) -> str:
     return str(value).replace("\\", "/")

@@ -1064,18 +1064,51 @@ WebView ─┘
 
 ## 16.4 GUI 启动
 
-例如：
+**产品化定稿（P0）**：GUI 有**自己的入口**，不再是 CLI 的子命令。
 
-```bash
-book gui
+```text
+BookDB.exe "E:\Books"     → 打开指定 Library
+BookDB.exe                → 打开上次使用的 Library
+                          → 无 / 已失效 → 欢迎页（新建 / 打开已有 / 最近使用）
 ```
 
-程序启动本地 WebView 窗口。
+- 普通用户**不经过 CLI**，也不需要理解「工作目录」；
+- 开发期入口为 `BookDB`（`[project.gui-scripts]`），打包后为 `BookDB.exe`；
+- CLI 的 `book gui` **保留**（等价于「用当前目录的 `book.toml` 打开」），供高级用户/自动化使用。
 
 GUI 由 pywebview 在**内部**托管一个仅绑定 `127.0.0.1`、**不对外暴露**的 HTTP 端点，作为 WebView 与 Python Core 之间的传输层。
 
+------
+
+## 16.5 Library 管理（P0 产品化）
+
+**数据架构不变**：**一个目录 = 一个独立 Library = 一个 `book.db`**。
+GUI 只是**显式**维护「当前打开的是哪个 Library」，不再依赖 cwd。
+
+| 能力 | 说明 |
+|---|---|
+| 新建 Library | 选一个目录 → 在其中生成 `book.toml` + `book.db`（幂等，绝不 DROP/DELETE） |
+| 打开已有 Library | 选目录 → 校验其中是否有 `book.toml` → 打开 |
+| 最近使用 | 最多 8 条，记于应用设置；失效条目标灰不可点 |
+| 当前 Library | 运行时状态；**单开** —— 同一时刻只有一个 |
+| 切换 Library | 替换服务持有的配置引用，**无需重启进程** |
+
+**三者分离**（原则）：
+
 ```text
-book gui
+程序本体   BookDB.exe
+应用设置   %APPDATA%\BookDB\settings.json   ← 只存偏好与历史（最近/上次 Library）
+用户数据   <Library 目录>\{book.toml, book.db, *.pdf}
+```
+
+- 应用设置**绝不**存 Library 自己的配置（`library_root` / `db_path` / `vlm` 仍只在各自的 `book.toml`）；
+- 命令行参数只是「指定启动时打开哪个 Library」，**不写入任何全局配置**；
+- 设置文件损坏/缺失 → 当空设置处理（**绝不因此起不来**），进入欢迎页。
+
+**P0 明确不做**：多 Library 同时打开、多窗口/多标签、全局数据库。
+
+```text
+BookDB.exe（或 book gui）
    ↓
 pywebview 启动 WebView 窗口
    ↓
@@ -1106,7 +1139,12 @@ SQLite
 接口一览（`gui/server.py`）：
 
 ```text
-GET    /api/meta                     应用信息（条数 / 库根 / 模型）
+GET    /api/meta                     应用信息（条数 / 库根 / 模型 / 当前 Library）
+GET    /api/library/current          当前 Library（无库时 no_library=true）
+GET    /api/library/recent           最近使用的 Library（含 valid 标记）
+POST   /api/library/probe            校验目录是否为 Library（只读，不建库）
+POST   /api/library/create           在指定目录新建 Library
+POST   /api/library/open             打开 Library 并立即生效（无需重启进程）
 GET    /api/books                    列表（不含摘要）
 POST   /api/books                    新增（重复 → 409 + duplicates）
 GET    /api/books/{id}               详情（含摘要）

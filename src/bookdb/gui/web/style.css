@@ -68,6 +68,41 @@ table.mini th, table.mini td {
 table.mini th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--panel); }
 table.mini thead th:first-child, table.mini tbody td:first-child { width: 24px; text-align: center; }
 
+/* ─────────────────────────────────── 欢迎页（P0：尚未打开 Library） */
+.welcome {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg); padding: 24px;
+}
+.welcome-card {
+  width: min(520px, 100%); background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); box-shadow: var(--shadow); padding: 32px 30px;
+  text-align: center;
+}
+.welcome-card h1 { margin: 0 0 6px; font-size: 21px; }
+.welcome-card > p { margin: 0 0 20px; }
+.welcome-actions { display: flex; gap: 10px; justify-content: center; margin: 20px 0 14px; }
+.welcome-actions button { padding: 9px 18px; font-size: 14px; }
+.welcome-recent { text-align: left; margin: 4px 0 4px; }
+.welcome-recent h2 { font-size: 13px; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+.welcome-recent ul { list-style: none; margin: 0; padding: 0; max-height: 240px; overflow: auto; }
+.welcome-recent li {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px;
+  margin-bottom: 6px; cursor: pointer;
+}
+.welcome-recent li:hover { background: var(--accent-soft); border-color: var(--accent); }
+.welcome-recent li .nm { font-weight: 600; }
+.welcome-recent li.invalid { cursor: not-allowed; opacity: .55; }
+.welcome-recent li.invalid:hover { background: var(--panel); border-color: var(--line); }
+
+/* 启动提示条（如「命令行指定的书库无法打开」） */
+.notice {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 60;
+  padding: 10px 16px; background: #fff4e5; color: #8a5300;
+  border-bottom: 1px solid #f0d9b5; font-size: 13px;
+}
+
 /* ─────────────────────────────────────────── 高级筛选 */
 .filters {
   display: flex; flex-wrap: wrap; gap: 12px; align-items: center;

@@ -62,8 +62,88 @@ const state = { books: [], current: null, mode: 'view' };
 async function loadMeta() {
   try {
     const m = await api('/api/meta');
-    $('#lib-root').textContent = m.library_root ? `库根：${m.library_root}` : '未配置库根';
-  } catch (_) { /* 忽略 */ }
+    if (m.no_library) return m;
+    const root = m.library_root || '未配置';
+    $('#lib-root').textContent = m.library_name
+      ? `📚 ${m.library_name}　库根：${root}`
+      : `库根：${root}`;
+    return m;
+  } catch (_) { return null; }
+}
+
+/* ═══════════════════════════════ Library 欢迎页（P0：尚未打开书库） */
+function showWelcome() {
+  $('#welcome').classList.remove('hidden');
+  loadRecentLibraries();
+}
+function hideWelcome() { $('#welcome').classList.add('hidden'); }
+
+async function loadRecentLibraries() {
+  let data;
+  try { data = await api('/api/library/recent'); } catch (_) { return; }
+  const items = data.items || [];
+  const wrap = $('#welcome-recent');
+  if (!items.length) {
+    wrap.classList.add('hidden');
+    $('#welcome-sub').textContent = '还没有打开书库。';
+    return;
+  }
+  $('#welcome-sub').textContent = '选择一个书库开始，或者新建一个。';
+  wrap.classList.remove('hidden');
+  $('#welcome-list').innerHTML = items.map((it) =>
+    `<li data-path="${esc(it.path)}" class="${it.valid ? '' : 'invalid'}"
+         title="${it.valid ? '点击打开' : '该目录已不是书库'}">
+       <span class="nm">📚 ${esc(it.name)}</span>
+       <span class="muted small">${esc(it.path)}</span>
+       ${it.valid ? '' : '<span class="muted small">（已失效）</span>'}
+     </li>`).join('');
+  $all('#welcome-list li').forEach((li) => {
+    li.onclick = () => {
+      if (li.classList.contains('invalid')) { toast('该目录已不是书库，已失效', true); return; }
+      openLibrary(li.dataset.path);
+    };
+  });
+}
+
+async function openLibrary(path) {
+  try {
+    const r = await api('/api/library/open', { method: 'POST', body: { path } });
+    toast(`已打开书库：${r.name}`);
+    setTimeout(() => location.reload(), 300);
+  } catch (err) { toast(err.message, true); }
+}
+
+async function chooseAndOpenLibrary() {
+  const dir = await pickFolder();
+  if (!dir) return;
+  let probe;
+  try {
+    probe = await api('/api/library/probe', { method: 'POST', body: { path: dir } });
+  } catch (err) { toast(err.message, true); return; }
+  if (!probe.valid) { toast(probe.reason || '该目录不是 BookDB 书库', true); return; }
+  openLibrary(probe.path);
+}
+
+async function chooseAndCreateLibrary() {
+  const dir = await pickFolder();
+  if (!dir) return;
+  let created;
+  try {
+    created = await api('/api/library/create', { method: 'POST', body: { path: dir } });
+  } catch (err) { toast(err.message, true); return; }
+  toast(`已新建书库：${created.name}`);
+  openLibrary(created.path);
+}
+
+/** 启动提示条（来自 BookDB.exe 的参数解析结果），显示一次后从 URL 抹掉。 */
+function showStartupNotice() {
+  const notice = new URLSearchParams(location.search).get('notice');
+  if (!notice) return;
+  const el = $('#notice');
+  el.textContent = notice;
+  el.classList.remove('hidden');
+  setTimeout(() => el.classList.add('hidden'), 9000);
+  history.replaceState(null, '', location.pathname);
 }
 
 function renderRows(items) {
@@ -766,7 +846,19 @@ function bind() {
   $('#f-hasfile').onchange = runSearch;
 
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+
+  $('#welcome-new').onclick = chooseAndCreateLibrary;
+  $('#welcome-open').onclick = chooseAndOpenLibrary;
+}
+
+/** 启动流程：无书库 → 欢迎页；有书库 → 正常界面。 */
+async function boot() {
+  showStartupNotice();
+  const meta = await loadMeta();
+  if (!meta || meta.no_library) { showWelcome(); return; }
+  hideWelcome();
+  loadList().catch(err => toast(err.message, true));
 }
 
 bind();
-loadMeta().then(loadList).catch(err => toast(err.message, true));
+boot();

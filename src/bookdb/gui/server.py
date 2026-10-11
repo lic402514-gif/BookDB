@@ -34,10 +34,39 @@ from ..services import import_export as ie
 from ..services import rename as rename_service
 from ..services import scan as scan_service
 from ..services import search as search_service
+from ..services import setup as setup_service
 from ..services.context import Context
 from ..services.llm import ModelUnavailableError
+from . import library
+from . import settings
 
-WEB_DIR = Path(__file__).parent / "web"
+
+def _web_dir() -> Path:
+    """前端资源目录。
+
+    兼容 PyInstaller：onefile 模式下资源解压在 `sys._MEIPASS`，
+    故优先探测打包位置，再回退到源码位置。
+    """
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        candidate = Path(base) / "bookdb" / "gui" / "web"
+        if candidate.is_dir():
+            return candidate
+    return Path(__file__).parent / "web"
+
+
+WEB_DIR = _web_dir()
+
+#: 无 Library 时**仍可访问**的接口（欢迎页需要它们）。
+#: 其余数据类接口在无库时返回 409 + no_library，前端据此回欢迎页。
+NO_LIBRARY_PATHS = frozenset({
+    "/api/meta",
+    "/api/library/current",
+    "/api/library/recent",
+    "/api/library/probe",
+    "/api/library/create",
+    "/api/library/open",
+})
 
 
 class ApiError(Exception):
@@ -51,16 +80,104 @@ class ApiError(Exception):
 
 # ═══════════════════════════════════════════════════════════════════ 处理函数
 # 签名：(config, match, query, body) → 可 JSON 序列化的负载
-def _h_meta(config: Config, match, query, body) -> dict:
+def _library_dir(config: Config | None) -> Path | None:
+    """当前 Library 目录（= book.toml 所在目录）。"""
+    if config is None or config.config_path is None:
+        return None
+    return config.config_path.parent
+
+
+def _library_payload(config: Config | None) -> dict:
+    """当前 Library 的概览。**只有 config 为 None 才算「无库」**。
+
+    `path`/`name` 可能为 None（配置不是从 `book.toml` 加载的，例如 CLI 默认配置），
+    此时仍是「有库」状态 —— 前端不会误显示欢迎页。
+    """
+    if config is None:
+        return {
+            "no_library": True, "path": None, "name": None,
+            "db_path": None, "library_root": None, "count": 0,
+        }
+    directory = _library_dir(config)
     with Context.open(config) as ctx:
         count = len(book_service.list_books(ctx))
     return {
-        "count": count,
+        "no_library": False,
+        "path": str(directory) if directory else None,
+        "name": directory.name if directory else None,
         "db_path": str(config.db_path),
         "library_root": str(config.library_root) if config.library_root else None,
+        "count": count,
+    }
+
+
+def _h_meta(config: Config | None, match, query, body) -> dict:
+    """程序与当前 Library 概览。**无 Library 时也必须能返回**（用作就绪探测）。"""
+    if config is None:
+        return {
+            "no_library": True, "count": 0, "db_path": None,
+            "library_root": None, "library_path": None, "library_name": None,
+            "model": None, "endpoint": None,
+        }
+    payload = _library_payload(config)
+    return {
+        "no_library": False,
+        "count": payload["count"],
+        "db_path": payload["db_path"],
+        "library_root": payload["library_root"],
+        "library_path": payload["path"],
+        "library_name": payload["name"],
         "model": config.vlm.model,
         "endpoint": config.vlm.endpoint,
     }
+
+
+# ═══════════════════════════════════════════════════ Library 管理（P0 产品化）
+def _h_library_current(config: Config | None, match, query, body) -> dict:
+    """当前 Library。"""
+    return _library_payload(config)
+
+
+def _h_library_recent(config: Config | None, match, query, body) -> dict:
+    """最近使用的 Library（含「是否仍有效」标记，供前端标灰）。"""
+    state = settings.Settings.load()
+    return {
+        "items": [
+            {
+                "path": str(r.path),
+                "name": r.name,
+                "opened_at": r.opened_at,
+                "valid": library.is_valid_path(r.path),
+            }
+            for r in state.recent
+        ],
+        "last_library": str(state.last_library) if state.last_library else None,
+    }
+
+
+def _h_library_probe(config: Config | None, match, query, body) -> dict:
+    """校验某目录是不是 Library（**只读，不打开、不写设置**）。"""
+    target = (body or {}).get("path")
+    if not target or not str(target).strip():
+        raise ApiError("缺少 path（要校验的目录）", 400)
+    return library.probe(str(target).strip())
+
+
+def _h_library_create(config: Config | None, match, query, body) -> dict:
+    """在指定目录新建 Library（幂等；已存在数据库则 409）。"""
+    body = dict(body or {})
+    target = str(body.get("path") or "").strip()
+    if not target:
+        raise ApiError("缺少 path（新建 Library 的目录）", 400)
+    root = str(body.get("library_root") or "").strip() or None
+
+    try:
+        lib = library.Library.create(target, library_root=root)
+    except setup_service.DatabaseExistsError as exc:
+        raise ApiError(f"该目录已有书库数据库：{exc.db_path}", 409) from exc
+    except (library.LibraryError, OSError, ValueError) as exc:
+        raise ApiError(str(exc), 400) from exc
+    return {"path": str(lib.path), "name": lib.name}
 
 
 def _h_list(config: Config, match, query, body) -> dict:
@@ -500,6 +617,11 @@ def _h_scan_apply(config: Config, match, query, body) -> dict:
 # ═══════════════════════════════════════════════════════════════════ 路由表
 ROUTES = [
     ("GET", r"^/api/meta$", _h_meta),
+    ("GET", r"^/api/library/current$", _h_library_current),
+    ("GET", r"^/api/library/recent$", _h_library_recent),
+    ("POST", r"^/api/library/probe$", _h_library_probe),
+    ("POST", r"^/api/library/create$", _h_library_create),
+    # 注意：/api/library/open 不进本表 —— 它需要访问服务自身（见 _handle 的特殊路由）
     ("GET", r"^/api/books$", _h_list),
     ("POST", r"^/api/books$", _h_add),
     ("GET", r"^/api/books/(?P<id>\d+)$", _h_get),
@@ -556,6 +678,18 @@ class Handler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
         body = self._read_body()
         config = self.server.config  # type: ignore[attr-defined]
+
+        # 无 Library 时，只放行欢迎页需要的接口；其余返回 409（前端据此回欢迎页）
+        if config is None and parsed.path not in NO_LIBRARY_PATHS:
+            return self._send(409, {"error": "尚未打开书库", "no_library": True})
+
+        # 特殊路由：切换 Library 要替换服务持有的 config 引用 —— 只有它能碰到
+        # `self.server`，故不进通用路由表（否则得改动全部 handler 签名）。
+        if parsed.path == "/api/library/open":
+            if method != "POST":
+                return self._send(405, {"error": "method not allowed"})
+            return self._open_library(body)
+
         matched_path = False
 
         for verb, pattern, handler in _COMPILED:
@@ -573,6 +707,28 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(500, {"error": f"{type(exc).__name__}: {exc}"})
 
         self._send(405 if matched_path else 404, {"error": f"未知接口：{parsed.path}"})
+
+    # ------------------------------------------------------- Library 切换
+    def _open_library(self, body: dict) -> None:
+        """打开指定 Library 并**立即生效**（P0 单开：同一时刻只有一个当前 Library）。
+
+        实现 = 替换服务持有的 config 引用。每个请求都从 `server.config` 现取，
+        因此替换后前端 `location.reload()` 即切到新库，**无需重启进程**。
+        """
+        target = str((body or {}).get("path") or "").strip()
+        if not target:
+            return self._send(400, {"error": "缺少 path（要打开的 Library 目录）"})
+        try:
+            lib = library.Library.open(target)
+        except library.LibraryError as exc:
+            return self._send(400, {"error": str(exc)})
+
+        state = settings.Settings.load()
+        state.touch(lib.path, lib.name)
+        state.save()
+
+        self.server.config = lib.config      # type: ignore[attr-defined]
+        return self._send(200, {"path": str(lib.path), "name": lib.name})
 
     def _read_body(self) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
@@ -619,13 +775,22 @@ class _Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, addr, handler, config: Config):
+    def __init__(self, addr, handler, config: Config | None):
         super().__init__(addr, handler)
+        #: 可被 `/api/library/open` 替换（P0 单开：同一时刻只有一个当前 Library）。
+        #: **允许为 None** —— 程序可以「尚未打开任何 Library」的状态运行（显示欢迎页）。
         self.config = config
 
 
-def create_server(config: Config, host: str = "127.0.0.1", port: int = 0) -> ThreadingHTTPServer:
-    """创建内部 HTTP 服务（仅绑 127.0.0.1；port=0 由系统分配空闲端口）。"""
+def create_server(
+    config: Config | None = None,
+    host: str = "127.0.0.1",
+    port: int = 0,
+) -> ThreadingHTTPServer:
+    """创建内部 HTTP 服务（仅绑 127.0.0.1；port=0 由系统分配空闲端口）。
+
+    `config=None` 表示「尚未打开 Library」—— 服务仍可运行，只有欢迎页能用的接口可用。
+    """
     return _Server((host, port), Handler, config)
 
 

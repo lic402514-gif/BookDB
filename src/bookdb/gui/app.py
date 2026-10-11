@@ -13,6 +13,7 @@ from __future__ import annotations
 import threading
 import time
 import urllib.request
+from urllib.parse import urlencode
 
 from ..config import Config
 from .server import create_server, server_url
@@ -60,8 +61,12 @@ def wait_ready(url: str, timeout: float = 5.0) -> bool:
     return False
 
 
-def run(config: Config) -> None:
-    """启动 GUI，阻塞直到窗口关闭。"""
+def run(config: Config | None = None, *, notice: str | None = None) -> None:
+    """启动 GUI，阻塞直到窗口关闭。
+
+    `config=None` → 以「尚未打开 Library」状态启动，前端显示欢迎页（P0 产品化）。
+    `notice` → 需要向用户说明的启动提示（如参数路径不是书库），前端以提示条展示。
+    """
     try:
         import webview
     except ImportError as exc:  # pragma: no cover - 取决于环境
@@ -70,9 +75,11 @@ def run(config: Config) -> None:
         ) from exc
 
     server = create_server(config)
-    url = server_url(server)
+    base_url = server_url(server)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    wait_ready(url)
+    wait_ready(base_url)          # 就绪探测用**不带查询串**的地址
+
+    url = f"{base_url}?{urlencode({'notice': notice})}" if notice else base_url
 
     try:
         webview.create_window(
