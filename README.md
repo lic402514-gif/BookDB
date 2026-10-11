@@ -30,6 +30,10 @@
 
 适合放在 U 盘或不想安装的场景。
 
+> 想校验下载是否完整？Release 里附有 `SHA256SUMS.txt`，可执行
+> `sha256sum -c SHA256SUMS.txt`，或在 PowerShell 里
+> `Get-FileHash .\BookDB-0.1.0-Setup.exe -Algorithm SHA256` 后手工比对。
+
 ### 🔒 你的数据在哪
 
 BookDB 把「程序」和「你的书库」**彻底分开**：
