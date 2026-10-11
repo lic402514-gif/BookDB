@@ -27,10 +27,19 @@ DEFAULT_DB_NAME = "book.db"
 
 @dataclass
 class VlmConfig:
-    """本地 VLM 适配配置（默认对接 Ollama）。"""
+    """本地 VLM 适配配置（PRD §13 / §17）。
+
+    `backend`：
+      · `auto`    —— 内置 llama.cpp 就绪就用它，否则回退到已启动的 Ollama（默认）
+      · `builtin` —— 只用内置模型
+      · `ollama`  —— 只用 Ollama
+    `builtin_model` 为内置模型的 key（见 `services/model.CATALOG`）。
+    """
 
     endpoint: str = "http://127.0.0.1:11434"
     model: str = "qwen2.5vl:3b"
+    backend: str = "auto"
+    builtin_model: str = "3b"
 
 
 @dataclass
@@ -75,6 +84,10 @@ class Config:
             cfg.vlm.endpoint = str(vlm["endpoint"])
         if vlm.get("model"):
             cfg.vlm.model = str(vlm["model"])
+        if vlm.get("backend"):
+            cfg.vlm.backend = str(vlm["backend"])
+        if vlm.get("builtin_model"):
+            cfg.vlm.builtin_model = str(vlm["builtin_model"])
 
         return cfg
 
@@ -103,6 +116,8 @@ class Config:
             "[vlm]",
             f'endpoint = "{self.vlm.endpoint}"',
             f'model = "{self.vlm.model}"',
+            f'backend = "{self.vlm.backend}"',
+            f'builtin_model = "{self.vlm.builtin_model}"',
             "",
         ]
         path.write_text("\n".join(lines), encoding="utf-8")

@@ -53,8 +53,79 @@ _FIELDS = (
 
 
 def get_adapter(vlm: VlmConfig) -> VLMAdapter:
-    """按配置返回适配器（默认 Ollama）。"""
-    return OllamaAdapter(endpoint=vlm.endpoint, model=vlm.model)
+    """按配置选择适配器（PRD §13 / §17）。
+
+    优先级（`vlm.backend`）：
+      · `auto`（默认）—— 内置 llama.cpp 就绪就用它；否则若 Ollama 在跑就用 Ollama；
+        两者都不可用 → 明确报错并给出**可操作的**指引（不静默降级）。
+      · `builtin` —— 强制内置；未就绪直接报错。
+      · `ollama`  —— 强制 Ollama。
+    """
+    backend = getattr(vlm, "backend", "auto")
+
+    if backend in ("auto", "builtin"):
+        adapter = _builtin_adapter(vlm)
+        if adapter is not None:
+            return adapter
+        if backend == "builtin":
+            raise ModelUnavailableError(_builtin_hint())
+
+    if backend in ("auto", "ollama"):
+        if backend == "ollama" or _ollama_reachable(vlm.endpoint):
+            return OllamaAdapter(endpoint=vlm.endpoint, model=vlm.model)
+
+    raise ModelUnavailableError(_no_backend_hint())
+
+
+def _builtin_adapter(vlm: VlmConfig) -> VLMAdapter | None:
+    """内置推理就绪则返回适配器，否则 None（调用方决定回退或报错）。"""
+    from ..llm.adapters import llamacpp
+    from . import model as model_service
+
+    if not llamacpp.is_available():
+        return None
+    try:
+        spec = model_service.find(getattr(vlm, "builtin_model", "") or model_service.DEFAULT_KEY)
+    except Exception:  # noqa: BLE001 - 配置里的 key 无效时退回默认
+        spec = model_service.find(model_service.DEFAULT_KEY)
+
+    st = model_service.state(spec)
+    if not st.ready:
+        return None
+    return llamacpp.LlamaServerAdapter(
+        model_path=st.paths[0], mmproj_path=st.paths[1],
+    )
+
+
+def _ollama_reachable(endpoint: str) -> bool:
+    """Ollama 是否在跑（短超时探测，避免拖慢启动）。"""
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"{endpoint.rstrip('/')}/api/tags", timeout=1.5) as r:
+            return r.status == 200
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _builtin_hint() -> str:
+    return (
+        "未找到可用的内置视觉模型。\n"
+        "请在 BookDB 界面里打开「AI 模型」页面下载（约 1.3~5.5 GB），\n"
+        "或运行命令行：book model pull"
+    )
+
+
+def _no_backend_hint() -> str:
+    return (
+        "没有可用的本地视觉模型。\n\n"
+        "两个选择：\n"
+        "  ① 用内置模型（推荐）—— 在 BookDB 的「AI 模型」页面下载，或运行：\n"
+        "         book model pull\n"
+        "  ② 用你已有的 Ollama —— 确认它已启动：\n"
+        "         ollama serve\n"
+        f"     并已拉取视觉模型（当前配置：{VlmConfig().model}）"
+    )
 
 
 # ------------------------------------------------------------------ parsing
