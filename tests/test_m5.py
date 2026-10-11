@@ -355,3 +355,22 @@ def test_reveal_file(api, monkeypatch):
     status, payload = api.call("POST", f"/api/reveal/{book_id}", {})
     assert status == 200 and payload["ok"]
     assert len(calls) == 1 and calls[0].name == "book.pdf"
+
+
+# ─────────────────────────────────────────── 文件路径双模式（走 GUI 接口）
+def test_gui_file_path_absolute_inside_root_stored_relative(api):
+    lib = Path(api.config.library_root)
+    p = lib / "in.pdf"
+    p.write_bytes(b"%PDF-1.4")
+    book_id = add(api, title="内", file_path=str(p))
+    _status, detail = api.call("GET", f"/api/books/{book_id}")
+    assert detail["file_path"] == "in.pdf"
+
+
+def test_gui_file_path_absolute_outside_root_kept_absolute(api):
+    lib = Path(api.config.library_root)
+    p = lib.parent / "out.pdf"
+    p.write_bytes(b"%PDF-1.4")
+    book_id = add(api, title="外", file_path=str(p))
+    _status, detail = api.call("GET", f"/api/books/{book_id}")
+    assert detail["file_path"] == str(p)
