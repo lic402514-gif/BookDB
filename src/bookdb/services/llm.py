@@ -19,28 +19,36 @@ from ..normalize import normalize_edition, normalize_isbn, normalize_year
 #: 字段清单即为要提取的全部内容；不得要求模型猜测（§12.4）
 #:
 #: 提示词要点（实测得出，勿删）：
-#:   1. 先**判定是不是版权页** —— 非版权页一律输出全 null。否则模型会从序言/正文里
-#:      **捏造**出版社和年份（旧提示词实测会在「主编序」页编出 出版社/年份）。
+#:   1. 非版权页一律输出全 null —— 否则模型会从封面/序言/正文里**捏造**出版社和年份
+#:      （旧提示词实测会在「主编序」页编出 出版社/年份）。
 #:   2. `publication_place` 只要城市 —— 否则模型会把出版社**详细地址**当真（实测）。
 #:   3. 民国纪年必须换算公元（民國99年 → 2010）—— 否则模型会输出 1999（实测）。
-PROMPT = """你要判断这张图书页面**是不是版权页**，并从版权页中提取书目信息。
+#:   4. 「第N册/卷/集」是**册次不是版次**，不得填入 edition（实测：书名里的「第二册」
+#:      被填成 edition=2，污染引用与改名）。
+#:   5. ISBN 只到校验位，不带「/A·10」这类分类后缀；读不全填 null（实测）。
+PROMPT = """你是图书版权页信息抽取器。从图片中提取书目元数据，只输出一个 JSON 对象。
 
-判断标准：版权页含「图书在版编目(CIP)数据」「ISBN」「出版者/出版社」「版次/印次」等出版信息。
-如果这一页不是版权页（例如书名页、序言、目录、正文、后记），**所有字段一律输出 null**，
-绝对不要从正文里猜测出版社或年份。
+规则：
+1. 只能填写图片中明确出现的文字，不得根据常识、书名、作者或已有知识猜测或补全。
+2. 图片中没有明确出现的信息，一律填 null。
+3. 如果不是版权页（封面、书名页、扉页、序言、目录、正文、后记、广告、空白页等），
+   所有字段均为 null。版权页的特征：「图书在版编目(CIP)数据」「ISBN」「出版社/出版者」
+   「版次」「印次」「定价」「责任编辑」等。
 
-字段说明：
-- title: 书名；author: 作者数组；translator: 译者数组
-- publisher: 出版社名称；publication_place: 出版地**只填城市**（如 北京、臺北），不要填详细地址
-- publication_year: 出版年份，**公元纪年整数**。若原书用民国纪年（如「民國99年」「中華民國九十九年」），
-  必须换算为公元年（民国年 + 1911），例如 民國99年 → 2010
-- edition: 版次（字符串，初版填 "1"）；isbn: ISBN 字符串
+字段：
+- title：书名。
+- author：作者，数组。
+- translator：译者，数组，仅当出现「译 / 译者」时填。
+- publisher：出版社名称，不要把地址、电话、网址当出版社。
+- publication_place：出版地，只填城市（如「北京」「臺北」），不要街道门牌。
+- publication_year：出版年份，公元纪年整数，只认出版信息附近标注的年份；
+  民国纪年需换算（民国年 + 1911，如 民國99年 → 2010）。
+- edition：版次。只有「第N版 / 第一版 / 初版 / 修订版」才算版次；
+  「第N册 / 卷 / 集」是册次不是版次，不要填；「第N次印刷」是印次，也不要填。
+- isbn：ISBN，只到校验位（10 位或 13 位），不要带「/分类号」后缀；读不全的 ISBN 填 null。
 
-无法确定的字段输出 null。**绝对不要猜测。**
-
-只输出一个 JSON 对象，不要解释、不要 markdown 围栏。
-
-示例（非版权页）：{"title": null, "author": null, "translator": null, "publisher": null, "publication_place": null, "publication_year": null, "edition": null, "isbn": null}"""
+只输出 JSON，不要解释，不要 markdown 围栏。
+示例：{"title": null, "author": null, "translator": null, "publisher": null, "publication_place": null, "publication_year": null, "edition": null, "isbn": null}"""
 
 _FENCED = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _OBJECT = re.compile(r"\{.*\}", re.DOTALL)
@@ -161,6 +169,12 @@ def _as_year(value: object) -> int | None:
 
 def _as_edition(value: object) -> str | None:
     if value in (None, ""):
+        return None
+    text = str(value).strip()
+    # 「册 / 卷 / 集」是册次/卷次/集次，不是版次 —— 模型常把书名里的「第X册」
+    # 误填进 edition（实测《…文稿 第二册》→ edition=2，污染引用与改名）。
+    # 提示词已约束但 3B 模型仍会违反，故在此硬性兜底。
+    if re.search(r"[册卷集]", text):
         return None
     return normalize_edition(value)
 

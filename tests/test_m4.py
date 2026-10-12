@@ -69,6 +69,24 @@ def test_parse_bad_year_falls_back_to_none():
     assert meta["publication_year"] is None            # 不猜测、不崩溃
 
 
+def test_parse_edition_卷册集_is_not_edition():
+    """「第N册/卷/集」是册次不是版次 —— 硬性兜底置 None（实测书名「第二册」被误填）。"""
+    for bad in ("第二册", "第2册", "第三卷", "第5集"):
+        meta = llm_service.parse_metadata('{"title":"x","edition":"' + bad + '"}')
+        assert meta["edition"] is None, f"{bad} 不应被当作版次"
+
+
+def test_parse_edition_normal_still_works():
+    """正常版次不受兜底影响。"""
+    assert llm_service.parse_metadata('{"edition":"第2版"}')["edition"] == "2"
+
+
+def test_parse_isbn_strips_classification_suffix():
+    """CIP 分类号「/A·10」不是 ISBN 的一部分 —— 硬性兜底剥离。"""
+    meta = llm_service.parse_metadata('{"isbn":"7-5073-0027-7/A·10"}')
+    assert meta["isbn"] == "7507300277"
+
+
 def test_parse_without_json_raises():
     with pytest.raises(ValueError):
         llm_service.parse_metadata("模型没有输出任何 JSON")

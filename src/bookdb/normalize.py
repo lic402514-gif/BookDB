@@ -56,6 +56,9 @@ def normalize_isbn(raw: object | None) -> str | None:
     if raw is None:
         return None
     text = re.sub(r"[\s\-]", "", str(raw))
+    # 去掉「/A·10」这类中国图书馆分类后缀 —— CIP 数据里的分类号常被模型
+    # 连同 ISBN 一起输出（实测 "7-5073-0027-7/A·10" → 误存 "7507300277/A·10"）。
+    text = text.split("/")[0]
     return text or None
 
 

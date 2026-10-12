@@ -114,7 +114,7 @@ class LlamaServerAdapter(VLMAdapter):
         endpoint: str = "http://127.0.0.1",     # 仅用其 host 部分
         model: str = "local",                   # 请求体里的名字（无实际作用）
         threads: int | None = None,
-        ctx_size: int = 4096,
+        ctx_size: int = 16384,
         timeout: float = 300.0,
     ):
         super().__init__(endpoint=endpoint, model=model)
