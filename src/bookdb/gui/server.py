@@ -60,8 +60,12 @@ def _web_dir() -> Path:
 
 WEB_DIR = _web_dir()
 
-#: 无 Library 时**仍可访问**的接口（欢迎页需要它们）。
+#: 无 Library 时**仍可访问**的接口（欢迎页 + 应用级设置需要它们）。
 #: 其余数据类接口在无库时返回 409 + no_library，前端据此回欢迎页。
+#:
+#: ⚠️ `/api/model/*` 必须在这里：模型是**应用级**资源（存在 %APPDATA%，
+#:    与具体 Library 无关）。不进白名单的话，用户在欢迎页点「🧠 AI 模型」
+#:    会拿到 409，AI 面板整个不可用。（踩过）
 NO_LIBRARY_PATHS = frozenset({
     "/api/meta",
     "/api/library/current",
@@ -69,6 +73,12 @@ NO_LIBRARY_PATHS = frozenset({
     "/api/library/probe",
     "/api/library/create",
     "/api/library/open",
+    "/api/model/list",
+    "/api/model/status",
+    "/api/model/progress",
+    "/api/model/download",
+    "/api/model/cancel",
+    "/api/model/remove",
 })
 
 
@@ -566,12 +576,17 @@ def _h_model_list(config, match, query, body) -> dict:
 
 
 def _h_model_status(config, match, query, body) -> dict:
-    """当前实际会使用哪个后端（内置 / Ollama / 都不可用）。"""
+    """当前实际会使用哪个后端（内置 / Ollama / 都不可用）。
+
+    ⚠️ 必须容忍 `config is None`（尚未打开 Library 时的欢迎页状态）——
+    模型是应用级资源，无库时也要能查看/下载。
+    """
+    from ..config import VlmConfig
     from ..llm.adapters import llamacpp
     from ..llm.base import ModelUnavailableError
     from ..services import llm as llm_svc
 
-    vlm = config.vlm
+    vlm = config.vlm if config is not None else VlmConfig()
     out = {
         "backend": vlm.backend,
         "builtin_model": vlm.builtin_model,
@@ -580,6 +595,7 @@ def _h_model_status(config, match, query, body) -> dict:
         "ollama_reachable": llm_svc._ollama_reachable(vlm.endpoint),
         "active": None,
         "hint": None,
+        "no_library": config is None,
     }
     try:
         adapter = llm_svc.get_adapter(vlm)

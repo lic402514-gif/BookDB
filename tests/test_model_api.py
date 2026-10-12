@@ -218,3 +218,46 @@ def test_frontend_has_first_run_ai_hint(api):
     assert "aiHintDismissed" in js           # 会话内记住"以后再说"
     assert "ai-hint-go" in js and "开放设置" not in js
     assert "checkAiReady()" in js            # 启动流程里被调用
+
+
+# ──────────────────────────────── 无库时也要能管理模型（应用级资源）
+@pytest.fixture()
+def api_no_library(tmp_path: Path):
+    """没有打开任何 Library 的服务（欢迎页状态）。"""
+    server = create_server(None, port=0)
+    import threading
+
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield Api(server, None)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_model_endpoints_work_without_library(api_no_library):
+    """⚠️ 回归：模型是应用级资源（存 %APPDATA%），无库时也必须可用。
+
+    否则用户在欢迎页点「🧠 AI 模型」会拿到 409，面板整个用不了。
+    """
+    for path in ("/api/model/list", "/api/model/status", "/api/model/progress"):
+        status, data = api_no_library.call("GET", path)
+        assert status == 200, f"{path} → {status} {data}"
+    _s, listing = api_no_library.call("GET", "/api/model/list")
+    assert [i["key"] for i in listing["items"]] == ["3b", "7b"]
+    _s, st = api_no_library.call("GET", "/api/model/status")
+    assert st["no_library"] is True          # 明确告知前端当前无库
+    assert "backend" in st and "active" in st
+
+
+def test_model_select_still_requires_library(api_no_library):
+    """选用模型要写 book.toml —— 无库时被守卫拒绝（不是静默失败）。"""
+    status, r = api_no_library.call("POST", "/api/model/select", {"key": "7b"})
+    assert status == 409
+    assert r.get("no_library") is True or "book.toml" in r.get("error", "")
+
+
+def test_data_endpoints_still_blocked_without_library(api_no_library):
+    """数据类接口在无库时仍应 409（守卫没被放宽过头）。"""
+    status, r = api_no_library.call("GET", "/api/books")
+    assert status == 409 and r.get("no_library") is True
