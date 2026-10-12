@@ -1291,6 +1291,30 @@ async function boot() {
   if (!meta || meta.no_library) { showWelcome(); return; }
   hideWelcome();
   loadList().catch(err => toast(err.message, true));
+  checkAiReady();          // 不阻塞主流程
+}
+
+/** AI 未就绪时给一次友好提示（**不打扰**：只提示一次，可直接关掉）。 */
+async function checkAiReady() {
+  if (sessionStorage.getItem('aiHintDismissed')) return;
+  let st;
+  try { st = await api('/api/model/status'); }
+  catch { return; }
+  if (st.active) return;                    // 内置或 Ollama 可用 → 不提示
+
+  const el = document.createElement('div');
+  el.className = 'ai-status bad';
+  el.style.cssText = 'margin:8px 12px;display:flex;gap:10px;align-items:center';
+  el.innerHTML =
+    `<span style="flex:1">AI 功能尚未就绪（版权页提取 / 批量补全需一个本地视觉模型）。</span>
+     <button class="primary" id="ai-hint-go">去设置</button>
+     <button class="ghost" id="ai-hint-x">以后再说</button>`;
+  $('.list-pane').prepend(el);
+  $('#ai-hint-go').onclick = () => { el.remove(); openAiPanel(); };
+  $('#ai-hint-x').onclick = () => {
+    el.remove();
+    sessionStorage.setItem('aiHintDismissed', '1');   // 本次会话不再打扰
+  };
 }
 
 bind();

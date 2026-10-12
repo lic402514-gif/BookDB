@@ -34,6 +34,18 @@ SRC = ROOT / "src"
 
 webview_datas, webview_binaries, webview_hidden = collect_all("webview")
 
+# ── 内置推理组件 llama.cpp（见 vendor/ 说明）────────────────────────────
+#: `vendor/llama/` 由 packaging/fetch_llama.sh 获取（48MB，不入 Git）。
+#: 打进 `_internal/llama/`，运行时由 `llamacpp.find_server_exe()` 从
+#: `sys._MEIPASS/llama/llama-server.exe` 找到 —— 用户无需再装 Ollama。
+_llama_dir = ROOT / "vendor" / "llama"
+if not (_llama_dir / "llama-server.exe").is_file():
+    raise SystemExit(
+        "缺少内置推理组件：vendor/llama/llama-server.exe\n"
+        "请先运行： bash packaging/fetch_llama.sh"
+    )
+llama_datas = [(str(_llama_dir), "llama")]
+
 # ── 补齐三个架构的 WebView2Loader.dll（见文件头说明）────────────────────
 _, _wv_pkg = get_package_paths("webview")
 _runtimes = Path(_wv_pkg) / "lib" / "runtimes"
@@ -51,6 +63,7 @@ a = Analysis(
     datas=[
         *webview_datas,
         *webview_arch_datas,
+        *llama_datas,
         (str(SRC / "bookdb" / "gui" / "web"), "bookdb/gui/web"),
     ],
     hiddenimports=[

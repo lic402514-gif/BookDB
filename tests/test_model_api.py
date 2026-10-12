@@ -209,3 +209,12 @@ def test_frontend_has_ai_panel(api):
     assert "openAiPanel" in js and "startDlPoll" in js
     assert "selectModel" in js and "removeModel" in js
     assert ".dl-fill" in css and ".model-row" in css
+
+
+def test_frontend_has_first_run_ai_hint(api):
+    """AI 未就绪时给一次提示（可关掉，不打扰）。"""
+    js = api.text("/app.js")
+    assert "checkAiReady" in js
+    assert "aiHintDismissed" in js           # 会话内记住"以后再说"
+    assert "ai-hint-go" in js and "开放设置" not in js
+    assert "checkAiReady()" in js            # 启动流程里被调用

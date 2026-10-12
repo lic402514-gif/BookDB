@@ -67,9 +67,10 @@ fi
 echo "  ✓ 就位"
 
 echo "[4/4] 编译安装包"
-"$ISCC" packaging/installer.iss
-
 VERSION=$(.venv/Scripts/python.exe -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])")
+echo "  版本：$VERSION"
+"$ISCC" /DAppVersion="$VERSION" packaging/installer.iss
+
 OUT="dist/BookDB-${VERSION}-Setup.exe"
 ls -la "$OUT"
 echo

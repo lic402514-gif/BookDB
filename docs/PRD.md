@@ -1200,6 +1200,13 @@ POST   /api/batch/move/preview       批量移动：逐条计划
 POST   /api/batch/move/apply         批量移动执行
 POST   /api/batch/delete/preview     批量删除：逐条计划（含文件大小）
 POST   /api/batch/delete/apply       批量删除执行（记录 / 记录+文件，**需 confirm:true**）
+GET    /api/model/list               内置模型清单 + 本机状态（已下载 / 复用 Ollama / 未安装）
+GET    /api/model/status             当前实际会使用哪个后端（内置 / Ollama / 不可用）
+GET    /api/model/progress           下载进度（百分比 / 已下 / 总量）
+POST   /api/model/select             选用某款内置模型（写回 book.toml）
+POST   /api/model/download           启动后台下载（并发请求 409）
+POST   /api/model/cancel             取消下载
+POST   /api/model/remove             删除本程序下载的模型文件
 POST   /api/scan/preview             扫描目录 → 建库计划（不写库）
 POST   /api/scan/apply               按勾选项批量建记录
 ```
@@ -1593,6 +1600,78 @@ isbn13
 
 > **例外（已实现）**：原列于此的「**批量扫描目录**」已作为后续迭代加入 —— 见 §21 `book scan`
 > 与 §16 的 `/api/scan/*` 接口。它按**文件名解析**元数据，先预览再写入，不调用模型。
+
+------
+
+## 25.1 内置本地模型（已实现）
+
+§13 要求「不绑定具体模型、适配层可替换」。现已在其上增加**内置推理**，
+使普通用户**不必安装 Ollama 等外部软件**即可使用 AI 提取。
+
+### 25.1.1 为什么用 llama-server 子进程，而不是 Python 绑定
+
+实测：PyPI 上 `llama-cpp-python` 最新预编译轮子（0.3.36）**不认识 `qwen25vl` 架构**
+（`unknown model architecture: 'qwen25vl'`），自编译又要求用户装 C++ 工具链。
+llama.cpp 官方 release 提供 **Windows 预编译二进制**（CPU 版解压后约 48 MB），
+对最新架构跟进及时，且提供 **OpenAI 兼容**的 `/v1/chat/completions`。
+
+故采用：**随包分发 llama-server 二进制 + 子进程调用**。
+
+### 25.1.2 模型与分发
+
+| | |
+|---|---|
+| 内置清单 | Qwen2.5-VL **3B**（默认，约 2.8 GB）、**7B**（约 5.5 GB）|
+| 获取方式 | 程序内下载（默认 **hf-mirror** 镜像，失败回退官方源），支持**断点续传** |
+| 存放位置 | `%APPDATA%\BookDB\models\`（与程序分离，卸载默认保留）|
+| **复用 Ollama** | 若本机已有对应模型（blob 即标准 GGUF），**直接复用，零下载** |
+
+**⚠️ 实测结论**：曾计划收录更小的 **MiniCPM-V 4.6**，但实测对本项目所用的
+结构化 JSON 提示词会输出**空字符串**（简短提问则正常）—— 不适合本任务，故不收录。
+
+### 25.1.3 后端选择
+
+`book.toml` 的 `[vlm].backend`：
+
+- `auto`（默认）—— 内置就绪则用内置；否则若 Ollama 在跑就用 Ollama；
+  **两者都不可用 → 明确报错并给出可操作指引**（不静默降级）。
+- `builtin` / `ollama` —— 强制其一。
+
+`[vlm].builtin_model` 选择内置清单里的哪一款。
+
+### 25.1.4 ⚠️ 实现要点（实测踩坑，勿删）
+
+1. **就绪判定不能只看日志**：端口被别的进程占用时，`llama-server`
+   **既不报错也不退出，还打印 `listening on http://...`（谎报）**。
+   必须「健康检查 + 响应体校验」双重确认，并在超时时**换端口重试**。
+2. **Ollama 清单是多层的**：顶层 `layers` 里的 `model` 是 **ggml 引擎版**，
+   llama.cpp 加载会报 `unknown model architecture: 'qwen25vl'`；
+   **只有 llamacpp 引擎子清单里的 model + projector 成对可用**。
+   解析时必须递归，且「**必须与 projector 成对出现**才算数」。
+3. `mediaType` 解析**不能** `rsplit('.', 1)[-1]` ——
+   `application/vnd.docker.distribution.manifest.v2+json` 会得到 `'v2+json'`，
+   把 `manifest` 关键字丢掉。
+
+------
+
+## 25.2 后续扩展（仍未做）
+
+以下功能不进入当前 Demo：
+
+- SQLite FTS5；
+- BibTeX；
+- RIS；
+- 多文件关联；
+- OCR；
+- 在线 ISBN 查询；
+- 在线书目数据库；
+- 自动摘要；
+- 自动 CLC 分类；
+- 云同步；
+- 多用户；
+- 阅读器；
+- 独立 Web 服务。
+- 用云 API（OpenAI / Gemini 等）做 AI 提取 —— 与「本地优先」定位冲突，暂不考虑。
 
 其中：
 

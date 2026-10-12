@@ -22,6 +22,20 @@
 > 安装过程无需管理员权限；界面所需的 Microsoft WebView2 运行环境
 > 若缺失，安装程序会**自动处理**，你不必做任何额外配置。
 
+### 🤖 AI 提取元数据（可选）
+
+BookDB **内置了 AI 推理引擎**，你**不需要**安装 Ollama 或任何其他 AI 软件。
+
+需要用「版权页提取」或「批量补全」时，打开工具栏的 **🧠 AI 模型**，下载一个即可：
+
+| 模型 | 体积 | 说明 |
+|---|---|---|
+| **Qwen2.5-VL 3B** | 约 2.8 GB | 推荐 |
+| **Qwen2.5-VL 7B** | 约 5.5 GB | 质量更好 |
+
+- **已经装过 Ollama**？若你拉取过 `qwen2.5vl:3b`，BookDB 会**自动识别并复用**，零下载。
+- 不下载也**不影响其它全部功能**（图书管理、扫描建库、批量重命名、导入导出…）。
+
 ### 方式二：便携版（免安装）
 
 1. 下载 **`BookDB-0.1.0-win64.zip`**
@@ -63,7 +77,7 @@ BookDB 把「程序」和「你的书库」**彻底分开**：
 - **数据交换**：JSON / CSV 导入导出 + 字段级 patch（显式 `mode`、变更预览、NULL 语义）
 - **文件重命名**：按元数据生成规范化文件名，`--dry-run` 预览 / `--apply` 执行，同步更新库内路径
 - **引用输出**：GB/T 7714-2015 专著（`book cite`）；版本项按国标 —— 第 1 版不著录，其余写作 `2版`
-- **版权页提取**：本地 VLM（Ollama）从版权页图像提取元数据，人工确认后写入；**支持扫描件**（无文本层时逐页渲染喂 VLM）
+- **版权页提取**：本地 VLM 从版权页图像提取元数据，人工确认后写入；**支持扫描件**（无文本层时逐页渲染喂 VLM）。**内置 llama.cpp 推理引擎**，也兼容已有 Ollama
 - **桌面 GUI**：pywebview + 原生 HTML/CSS/JS，内部仅 127.0.0.1 的 HTTP 端点，不对外暴露
 - **独立桌面入口**：`BookDB` 自带 GUI 入口，不经 CLI；程序、应用设置、用户数据三者分离
 - **Library 管理**：GUI 自己维护「当前书库」——首次启动显示欢迎页（新建 / 打开 / 最近使用），自动打开上次书库，支持运行中切换
@@ -223,18 +237,34 @@ endpoint = "http://127.0.0.1:11434"
 model = "qwen2.5vl:3b"
 ```
 
-## 本地模型（M4 版权页提取）
+## 本地模型（版权页提取）
 
-`book enrich` 需要本机运行 **Ollama** + 一个视觉语言模型：
+`book enrich` 有两种后端，**默认 `auto`**（内置可用就用内置，否则回退到已启动的 Ollama）：
 
 ```bash
-# 1. 安装 Ollama —— https://ollama.com/download
-# 2. 启动服务并拉取视觉模型（约 3B）
+# ① 内置（推荐，不依赖 Ollama）
+bash packaging/fetch_llama.sh   # 获取 llama.cpp 二进制 → vendor/llama/
+book model pull                 # 下载 Qwen2.5-VL 3B（约 2.8 GB）
+# 若本机 Ollama 已有 qwen2.5vl:3b，会自动复用，无需下载
+
+# ② 或者用你已有的 Ollama
 ollama serve
 ollama pull qwen2.5vl:3b
-# 3. 安装 PDF 依赖
+
+# 无论哪种，都需要 PDF 依赖
 uv pip install -e ".[pdf]"
 ```
+
+管理命令：
+
+```bash
+book model list          # 可选的模型 + 本机状态（已下载 / 复用 Ollama / 未安装）
+book model status        # 当前实际会用哪个后端
+book model pull 7b       # 下载更大的 7B（质量优先）
+book model remove 3b     # 删除本程序下载的（不动 Ollama 里的）
+```
+
+后端由 `book.toml` 的 `[vlm].backend` 决定：`auto`（默认）/ `builtin` / `ollama`。
 
 模型名 / 端点写在 `book.toml` 的 `[vlm]`，不硬编码；换成其他推理框架只需新增一个适配器。
 **模型不可用时 `book enrich` 会明确提示并退出，其余功能不受影响。**

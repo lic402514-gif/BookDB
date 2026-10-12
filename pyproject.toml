@@ -1,6 +1,6 @@
 [project]
 name = "bookdb"
-version = "0.1.0"
+version = "0.2.0"
 description = "本地优先的个人图书元数据管理工具（SQLite + Typer CLI + pywebview 桌面 GUI）"
 readme = "README.md"
 license = "GPL-3.0-or-later"

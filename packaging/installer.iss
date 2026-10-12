@@ -15,7 +15,11 @@
 ;   数据   用户自选的 Library 目录              安装包**从不创建、从不删除**
 
 #define AppName        "BookDB"
-#define AppVersion     "0.1.0"
+; 版本号由 makearchive 时传入：ISCC /DAppVersion=0.2.0
+; （packaging/make_installer.sh 会从 pyproject.toml 读出并传入，避免手工同步遗漏）
+#ifndef AppVersion
+  #define AppVersion "0.0.0"
+#endif
 #define AppPublisher   "lic402514-gif"
 #define AppURL         "https://github.com/lic402514-gif/BookDB"
 #define AppExeName     "BookDB.exe"
