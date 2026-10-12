@@ -102,6 +102,7 @@ def _builtin_adapter(vlm: VlmConfig) -> VLMAdapter | None:
         return None
     return llamacpp.LlamaServerAdapter(
         model_path=st.paths[0], mmproj_path=st.paths[1],
+        ctx_size=spec.ctx_size,
     )
 
 

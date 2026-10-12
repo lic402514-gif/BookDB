@@ -115,6 +115,7 @@ class LlamaServerAdapter(VLMAdapter):
         model: str = "local",                   # 请求体里的名字（无实际作用）
         threads: int | None = None,
         ctx_size: int = 16384,
+        n_gpu_layers: int = 99,     # 层数 offload 到 GPU（99=全部；无 GPU 时 llama.cpp 自动回退 CPU）
         timeout: float = 300.0,
     ):
         super().__init__(endpoint=endpoint, model=model)
@@ -122,6 +123,7 @@ class LlamaServerAdapter(VLMAdapter):
         self.mmproj_path = Path(mmproj_path)
         self.threads = threads or max(2, (__import__("os").cpu_count() or 4) // 2)
         self.ctx_size = ctx_size
+        self.n_gpu_layers = n_gpu_layers
         self.timeout = timeout
 
         self._proc: subprocess.Popen | None = None
@@ -163,7 +165,9 @@ class LlamaServerAdapter(VLMAdapter):
                     "--host", "127.0.0.1", "--port", str(port),
                     "--ctx-size", str(self.ctx_size),
                     "--threads", str(self.threads),
+                    "--n-gpu-layers", str(self.n_gpu_layers),
                     "--no-webui",
+                    "-lv", "4",
                 ],
                 cwd=str(exe.parent),
                 stdout=open(log, "w", encoding="utf-8", errors="replace"),

@@ -67,6 +67,7 @@ class ModelSpec:
     note: str                    # 一句话说明
     model: ModelFile             # 主模型
     mmproj: ModelFile            # 视觉投影层（必需）
+    ctx_size: int = 16384        # 上下文大小；7B 在 8GB 显存下 16K KV cache 装不下 → 8192
 
     @property
     def total_size(self) -> int:
@@ -109,6 +110,7 @@ CATALOG: tuple[ModelSpec, ...] = (
                  "Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf", 4_680_000_000),
         mmproj=_f("ggml-org/Qwen2.5-VL-7B-Instruct-GGUF",
                   "mmproj-Qwen2.5-VL-7B-Instruct-Q8_0.gguf", 853_120_000),
+        ctx_size=8192,   # 8GB 显存下 16K 的 KV cache 装不下（实测 fit 失败），降到 8K
     ),
 )
 
