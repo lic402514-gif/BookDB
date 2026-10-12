@@ -23,6 +23,9 @@ from pathlib import Path
 
 APP_DIR_NAME = "BookDB"
 SETTINGS_FILENAME = "settings.json"
+#: 模型子目录名（与 services/model.MODELS_DIRNAME 保持一致；
+#: 独立定义以免 gui ← services 的循环导入）
+MODELS_DIRNAME = "models"
 
 #: 最近库列表上限（超出淘汰最旧的）
 MAX_RECENT = 8
@@ -50,6 +53,22 @@ def app_data_dir() -> Path:
 def settings_path() -> Path:
     """settings.json 的完整路径。"""
     return app_data_dir() / SETTINGS_FILENAME
+
+
+def default_models_dir() -> Path:
+    """模型的**默认**存放位置。
+
+    ⚠️ 用 `%LOCALAPPDATA%`（用户级、非漫游）而非 `%APPDATA%`：
+      模型是 GB 级文件，放系统盘漫游目录会迅速吃满 C 盘（实测教训）。
+      用户可在设置里改到数据盘（`Settings.models_dir`）。
+    """
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA")
+        root = Path(base) if base else (Path.home() / "AppData" / "Local")
+    else:
+        # 非 Windows：按 XDG 数据目录规范（缓存/大数据文件放这里）
+        root = Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share"))
+    return root / APP_DIR_NAME / MODELS_DIRNAME
 
 
 @dataclass
@@ -86,6 +105,9 @@ class Settings:
 
     last_library: Path | None = None
     recent: list[RecentLibrary] = field(default_factory=list)
+    #: 模型存放目录。空 = 用 default_models_dir()（%LOCALAPPDATA%\BookDB\models）。
+    #: 模型是 GB 级文件，允许用户改到空间充足的数据盘。
+    models_dir: str = ""
     path: Path = field(default_factory=settings_path)
 
     # ------------------------------------------------------------------ load
@@ -102,6 +124,7 @@ class Settings:
 
         last = raw.get("last_library")
         recent_raw = raw.get("recent_libraries")
+        models = raw.get("models_dir")
         recent: list[RecentLibrary] = []
         if isinstance(recent_raw, list):
             for entry in recent_raw:
@@ -112,6 +135,7 @@ class Settings:
         return cls(
             last_library=Path(last) if isinstance(last, str) and last.strip() else None,
             recent=recent[:MAX_RECENT],
+            models_dir=models.strip() if isinstance(models, str) else "",
             path=target,
         )
 
@@ -123,6 +147,7 @@ class Settings:
             "version": SETTINGS_VERSION,
             "last_library": str(self.last_library) if self.last_library else None,
             "recent_libraries": [r.to_json() for r in self.recent[:MAX_RECENT]],
+            "models_dir": self.models_dir or "",
         }
         tmp = self.path.with_suffix(".json.tmp")
         tmp.write_text(

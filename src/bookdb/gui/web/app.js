@@ -961,8 +961,34 @@ async function openAiPanel() {
        <div class="dl-track"><div id="dl-fill" class="dl-fill"></div></div>
        <div class="dl-meta" id="dl-meta"></div>
      </div>
-     <p class="muted small" style="margin-top:10px">下载目录：${esc(data.models_dir)}</p>`,
+     <div class="model-dir">
+       <div class="model-head">
+         <b>模型存放位置</b>
+         <span class="badge" id="dir-used"></span>
+       </div>
+       <div class="model-note" id="dir-cur"></div>
+       <div class="model-actions">
+         <button class="ghost" id="btn-dir-change">更改位置…</button>
+         <button class="ghost" id="btn-dir-open">打开文件夹</button>
+       </div>
+     </div>`,
     [{ label: '关闭', onClick: () => { stopDlPoll(); closeModal(); } }]);
+
+  // 模型目录：显示 + 修改 + 打开
+  const dir = await api('/api/model/dir').catch(() => null);
+  if (dir) {
+    $('#dir-used').textContent = `占用 ${dir.used_human}`;
+    $('#dir-cur').innerHTML =
+      `${esc(dir.current)}${dir.is_custom ? ' <span class="badge info">自定义</span>' : ''}`;
+    $('#btn-dir-change').onclick = () => changeModelDir(dir);
+    $('#btn-dir-open').onclick = async () => {
+      try { await api('/api/model/dir/open', { method: 'POST' }); }
+      catch (err) { toast(err.message, true); }
+    };
+  } else {
+    $('#btn-dir-change').disabled = true;
+    $('#btn-dir-open').disabled = true;
+  }
 
   $('#modal-body').onclick = async (e) => {
     const btn = e.target.closest('button[data-act]');
@@ -988,6 +1014,37 @@ async function removeModel(key) {
     toast(r.freed ? `已释放 ${r.freed_human}` : '本地没有可删除的文件');
   } catch (err) { toast(err.message, true); return; }
   openAiPanel();
+}
+
+/** 更改模型存放位置（可把已下好的模型一并搬过去）。 */
+async function changeModelDir(dir) {
+  const html = `
+    <p class="muted small">模型是 GB 级文件。若系统盘（C:）空间紧张，
+      建议改到空间充足的数据盘。</p>
+    <label class="muted small">新位置</label>
+    <input id="dir-new" type="text" value="${esc(dir.configured || dir.current)}"
+           style="width:100%;margin:6px 0">
+    <label class="small" style="display:flex;gap:6px;align-items:center;margin-top:8px">
+      <input id="dir-move" type="checkbox" checked>
+      把已下载的模型一并移动过去（推荐）
+    </label>
+    <p class="muted small" id="dir-err" style="color:var(--danger)"></p>`;
+
+  openModal('更改模型存放位置', html, [
+    { label: '取消', onClick: closeModal },
+    { label: '确定', primary: true, onClick: async () => {
+        const path = $('#dir-new').value.trim();
+        if (!path) { $('#dir-err').textContent = '请填写路径'; return; }
+        try {
+          const r = await api('/api/model/dir', {
+            method: 'POST',
+            body: { path, move: $('#dir-move').checked },
+          });
+          toast(r.moved_human ? `已移动 ${r.moved_human}` : '位置已更新');
+        } catch (err) { $('#dir-err').textContent = err.message; return; }
+        openAiPanel();
+      } },
+  ]);
 }
 
 async function startDownload(key) {

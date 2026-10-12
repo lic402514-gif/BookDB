@@ -470,3 +470,34 @@ def test_acquire_rebuilds_when_process_died(monkeypatch, tmp_path):
     llamacpp.acquire(model_path=model, mmproj_path=mmproj)
     assert len(starts) == 2, "死进程应触发重启"
     llamacpp.shutdown_all()
+
+
+# ═══════════════════════════════════════════ 模型目录可配置（C 盘教训）
+def test_models_dir_default_is_not_roaming_appdata(monkeypatch, tmp_path):
+    """⚠️ 回归：默认模型目录**不得**在 %APPDATA%（漫游）里。
+
+    模型是 GB 级文件，放 `%APPDATA%\BookDB\models` 会迅速吃满 C 盘
+    （实测教训：7B 占 5.2GB，C 盘只剩 13GB）。默认应为 `%LOCALAPPDATA%`。
+    """
+    from bookdb.gui import settings as st
+
+    monkeypatch.delenv("BOOKDB_MODELS_DIR", raising=False)
+    monkeypatch.setenv("APPDATA", str(tmp_path / "Roaming"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    d = st.default_models_dir()
+    assert "Local" in str(d) and "Roaming" not in str(d), f"默认目录不该在漫游区: {d}"
+
+
+def test_models_dir_env_override(monkeypatch, tmp_path):
+    target = tmp_path / "custom-models"
+    monkeypatch.setenv("BOOKDB_MODELS_DIR", str(target))
+    assert model_service.models_dir() == target
+
+
+def test_settings_roundtrip_models_dir(tmp_path, monkeypatch):
+    from bookdb.gui import settings as st
+
+    p = tmp_path / "settings.json"
+    s = st.Settings(path=p, models_dir=r"D:\BookDB\models")
+    s.save()
+    assert st.Settings.load(p).models_dir == r"D:\BookDB\models"

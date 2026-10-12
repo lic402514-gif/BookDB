@@ -79,6 +79,7 @@ NO_LIBRARY_PATHS = frozenset({
     "/api/model/download",
     "/api/model/cancel",
     "/api/model/remove",
+    "/api/model/dir",
 })
 
 
@@ -692,6 +693,83 @@ def _h_model_remove(config, match, query, body) -> dict:
     return {"ok": True, "freed": freed, "freed_human": model_service.human_size(freed)}
 
 
+def _h_model_dir_get(config, match, query, body) -> dict:
+    """当前模型目录 + 默认目录 + 占用大小（供 GUI 展示/修改）。"""
+    from ..gui.settings import Settings, default_models_dir
+
+    current = model_service.models_dir()
+    try:
+        used = sum(f.stat().st_size for f in current.rglob("*") if f.is_file())
+    except OSError:
+        used = 0
+    return {
+        "current": str(current),
+        "default": str(default_models_dir()),
+        "configured": Settings.load().models_dir or "",
+        "used": used,
+        "used_human": model_service.human_size(used),
+        "is_custom": str(current) != str(default_models_dir()),
+    }
+
+
+def _h_model_dir_open(config, match, query, body) -> dict:
+    """在系统文件管理器中打开模型目录。"""
+    path = model_service.models_dir()
+    path.mkdir(parents=True, exist_ok=True)
+    launch(str(path))              # 模块级 launch()，测试可替换
+    return {"ok": True, "path": str(path)}
+
+
+def _h_model_dir_set(config, match, query, body) -> dict:
+    """修改模型目录。`move: true` 时把已下好的模型一并搬过去。
+
+    ⚠️ 只搬**本程序下载的**模型（Ollama 里的 blob 不动，那是 Ollama 的数据）。
+    """
+    import shutil
+
+    from ..gui.settings import Settings, default_models_dir
+
+    body = dict(body or {})
+    target_raw = str(body.get("path") or "").strip()
+    if not target_raw:
+        raise ApiError("缺少 path", 400)
+    target = Path(target_raw).expanduser()
+
+    old = model_service.models_dir()
+    if target == old:
+        return {"ok": True, "path": str(target), "moved": 0}
+
+    # 校验目标可写（不存在则尝试创建）—— 失败要明确报错，不静默
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        probe = target / ".bookdb_write_test"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+    except OSError as exc:
+        raise ApiError(f"目标目录不可写：{target}（{exc}）", 400) from exc
+
+    moved_bytes = 0
+    if body.get("move") and old.is_dir() and any(old.iterdir()):
+        for item in old.iterdir():
+            dest = target / item.name
+            if dest.exists():
+                continue            # 已存在则不覆盖（保守）
+            try:
+                shutil.move(str(item), str(dest))
+                moved_bytes += sum(f.stat().st_size for f in dest.rglob("*") if f.is_file())
+            except OSError as exc:
+                raise ApiError(f"迁移 {item.name} 失败：{exc}", 500) from exc
+
+    settings = Settings.load()
+    settings.models_dir = "" if target == default_models_dir() else str(target)
+    settings.save()
+    return {
+        "ok": True, "path": str(target),
+        "moved_bytes": moved_bytes,
+        "moved_human": model_service.human_size(moved_bytes),
+    }
+
+
 # ─────────────────────────────────────────────────────────── 版权页提取（VLM）
 def _h_enrich(config: Config, match, query, body) -> dict:
     body = body or {}
@@ -923,6 +1001,9 @@ ROUTES = [
     ("POST", r"^/api/model/download$", _h_model_download),
     ("POST", r"^/api/model/cancel$", _h_model_cancel),
     ("POST", r"^/api/model/remove$", _h_model_remove),
+    ("GET", r"^/api/model/dir$", _h_model_dir_get),
+    ("POST", r"^/api/model/dir$", _h_model_dir_set),
+    ("POST", r"^/api/model/dir/open$", _h_model_dir_open),
     ("GET", r"^/api/books$", _h_list),
     ("POST", r"^/api/books$", _h_add),
     ("GET", r"^/api/books/(?P<id>\d+)$", _h_get),

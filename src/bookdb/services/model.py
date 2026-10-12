@@ -128,10 +128,25 @@ def find(key: str) -> ModelSpec:
 
 # ────────────────────────────────────────────────────────────── 目录
 def models_dir() -> Path:
-    """用户模型目录（不存在则创建）。"""
-    from ..gui.settings import app_data_dir   # 延迟导入，避免循环
+    """模型存放目录（不存在则创建）。
 
-    path = app_data_dir() / MODELS_DIRNAME
+    优先级：
+      1. `BOOKDB_MODELS_DIR` 环境变量（用户/测试显式指定）
+      2. 应用设置里的 `models_dir`（GUI/CLI 可改，持久化到 settings.json）
+      3. 默认：`%LOCALAPPDATA%\\BookDB\\models`（用户级，非漫游）
+
+    ⚠️ 模型是 **GB 级**文件，绝不能放系统盘的漫游目录（`%APPDATA%`）——
+      那会让本就不宽裕的 C 盘雪上加霜（实测教训）。故默认用 `%LOCALAPPDATA%`，
+      并允许用户改到数据盘（见 `settings.models_dir`）。
+    """
+    override = os.environ.get("BOOKDB_MODELS_DIR")
+    if override:
+        path = Path(override)
+    else:
+        from ..gui.settings import Settings, default_models_dir  # 延迟导入，避免循环
+
+        configured = Settings.load().models_dir
+        path = Path(configured) if configured else default_models_dir()
     path.mkdir(parents=True, exist_ok=True)
     return path
 
