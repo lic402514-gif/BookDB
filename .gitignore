@@ -30,3 +30,4 @@ packaging/assets/bookdb.ico
 
 # 内置推理组件（由 packaging/fetch_llama.sh 下载，48MB，不入库）
 vendor/llama/
+vendor/llama.bak/
