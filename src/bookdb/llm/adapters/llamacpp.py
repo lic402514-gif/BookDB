@@ -18,6 +18,7 @@ from __future__ import annotations
 import atexit
 import base64
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -38,6 +39,46 @@ PORT_RETRIES = 3
 #: 保留一份全局引用，保证进程退出时能收尸（异常路径也不留孤儿进程）
 _LIVE: list["LlamaServerAdapter"] = []
 _LOCK = threading.Lock()
+
+#: 进程级复用缓存：同一份模型 + 同样的参数只启一个 llama-server。
+#:
+#: ⚠️ 为什么必须有：`extract_metadata()` 每页都会 `get_adapter()`，
+#:    若不复用则**每页启一个 llama-server 子进程**（每次重载 2–5GB 模型，
+#:    8–20 秒）—— 既慢、又会让控制台窗口反复闪现，还会因显存竞争
+#:    导致 `failed to process mtmd chunk` 500 错误（实测）。
+_SERVER_CACHE: dict[tuple, "LlamaServerAdapter"] = {}
+
+
+def acquire(
+    *,
+    model_path: str | Path,
+    mmproj_path: str | Path,
+    ctx_size: int = 16384,
+    threads: int | None = None,
+    n_gpu_layers: int = 99,
+) -> "LlamaServerAdapter":
+    """取一个**已就绪**的适配器；同参数复用同一个 llama-server 进程。
+
+    调用方**不要**自己 close —— 进程由 `shutdown_all()`（atexit）统一回收，
+    这样连续处理多本书时模型只加载一次。
+    """
+    key = (str(Path(model_path).resolve()), str(Path(mmproj_path).resolve()),
+           ctx_size, threads or 0, n_gpu_layers)
+    with _LOCK:
+        existing = _SERVER_CACHE.get(key)
+    if existing is not None and existing._proc is not None and existing._proc.poll() is None:
+        return existing
+    if existing is not None:          # 进程已死 → 清掉重建
+        existing.close()
+
+    adapter = LlamaServerAdapter(
+        model_path=model_path, mmproj_path=mmproj_path,
+        ctx_size=ctx_size, threads=threads, n_gpu_layers=n_gpu_layers,
+    )
+    adapter.start()
+    with _LOCK:
+        _SERVER_CACHE[key] = adapter
+    return adapter
 
 
 def _repo_root() -> Path | None:
@@ -172,6 +213,8 @@ class LlamaServerAdapter(VLMAdapter):
                 cwd=str(exe.parent),
                 stdout=open(log, "w", encoding="utf-8", errors="replace"),
                 stderr=subprocess.STDOUT,
+                # Windows：绝不弹控制台窗口（否则每启一次就闪一个黑框）
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
             self._proc, self._port, self._log_path = proc, port, log
             with _LOCK:
@@ -289,5 +332,6 @@ def shutdown_all() -> None:
     """停止所有存活的内置推理进程（程序退出时兜底调用）。"""
     with _LOCK:
         live = list(_LIVE)
+        _SERVER_CACHE.clear()
     for adapter in live:
         adapter.close()

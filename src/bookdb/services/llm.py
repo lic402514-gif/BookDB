@@ -100,7 +100,9 @@ def _builtin_adapter(vlm: VlmConfig) -> VLMAdapter | None:
     st = model_service.state(spec)
     if not st.ready:
         return None
-    return llamacpp.LlamaServerAdapter(
+    # 复用同一个 llama-server 进程（见 llamacpp.acquire 的说明）——
+    # 否则逐页提取时每页都会重启一次推理服务。
+    return llamacpp.acquire(
         model_path=st.paths[0], mmproj_path=st.paths[1],
         ctx_size=spec.ctx_size,
     )

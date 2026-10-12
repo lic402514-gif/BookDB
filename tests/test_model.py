@@ -410,3 +410,63 @@ def test_vlmconfig_has_backend_fields():
     vlm = VlmConfig()
     assert vlm.backend == "auto"
     assert vlm.builtin_model == "3b"
+
+
+# ═══════════════════════════════════════════ 进程复用（逐页提取的关键）
+def test_acquire_reuses_same_process(monkeypatch, tmp_path):
+    """⚠️ 回归：同参数的 acquire() 必须复用同一个 llama-server 进程。
+
+    修复前 `extract_metadata()` 每页都会 `get_adapter()` → 每页启一个
+    llama-server（重载 2–5GB 模型），既慢又会让控制台窗口反复闪现，
+    还因显存竞争导致 `failed to process mtmd chunk` 500 错误。
+    """
+    from bookdb.llm.adapters import llamacpp
+
+    calls = []
+
+    def fake_start(self):
+        calls.append(id(self))
+        self._proc = type("P", (), {"pid": 1234, "poll": lambda s=None: None})()
+
+    monkeypatch.setattr(llamacpp.LlamaServerAdapter, "start", fake_start)
+    llamacpp._SERVER_CACHE.clear()
+
+    model = tmp_path / "m.gguf"; model.write_bytes(b"x")
+    mmproj = tmp_path / "p.gguf"; mmproj.write_bytes(b"x")
+
+    a1 = llamacpp.acquire(model_path=model, mmproj_path=mmproj, ctx_size=8192)
+    a2 = llamacpp.acquire(model_path=model, mmproj_path=mmproj, ctx_size=8192)
+    a3 = llamacpp.acquire(model_path=model, mmproj_path=mmproj, ctx_size=8192)
+
+    assert a1 is a2 is a3, "同参数应返回同一个实例"
+    assert len(calls) == 1, f"只应启动一次，实际 {len(calls)} 次"
+
+    # 不同 ctx → 不同实例（避免参数串味）
+    a4 = llamacpp.acquire(model_path=model, mmproj_path=mmproj, ctx_size=16384)
+    assert a4 is not a1
+    assert len(calls) == 2
+
+    llamacpp.shutdown_all()
+    assert llamacpp._SERVER_CACHE == {}
+
+
+def test_acquire_rebuilds_when_process_died(monkeypatch, tmp_path):
+    """进程已死 → 重新拉起（不能复用死实例）。"""
+    from bookdb.llm.adapters import llamacpp
+
+    starts = []
+
+    def fake_start(self):
+        starts.append(1)
+        self._proc = type("P", (), {"pid": 999, "poll": lambda s=None: 0})()   # poll()!=None = 已退出
+
+    monkeypatch.setattr(llamacpp.LlamaServerAdapter, "start", fake_start)
+    llamacpp._SERVER_CACHE.clear()
+
+    model = tmp_path / "m.gguf"; model.write_bytes(b"x")
+    mmproj = tmp_path / "p.gguf"; mmproj.write_bytes(b"x")
+
+    llamacpp.acquire(model_path=model, mmproj_path=mmproj)
+    llamacpp.acquire(model_path=model, mmproj_path=mmproj)
+    assert len(starts) == 2, "死进程应触发重启"
+    llamacpp.shutdown_all()
