@@ -102,12 +102,23 @@ uv run pytest -q                       # 185 passed
 
 ```bash
 uv pip install -e ".[build]"
+bash packaging/fetch_llama.sh    # 取内置推理组件 → vendor/llama/（约 20 MB 下载）
 bash packaging/build.sh          # → dist/BookDB/BookDB.exe
 bash packaging/make_zip.sh       # → dist/BookDB-<版本>-win64.zip（便携版）
 bash packaging/make_installer.sh # → dist/BookDB-<版本>-Setup.exe（需 Inno Setup 6）
+bash packaging/make_checksums.sh # → dist/SHA256SUMS.txt
 ```
 
 安装包脚本见 `packaging/installer.iss`；图标由 `packaging/make_icon.py` 用标准库生成。
+
+> **llama.cpp 二进制从哪来？** 它约 48 MB（解压后），**不进 Git 历史**
+> （否则仓库永久膨胀）。已作为 Release 附件发布（锁定 build ，
+> 保证构建可复现）；`fetch_llama.sh` 会自动取用，依次尝试
+> GitHub API 端点 → github.com 直连 → 公共镜像。
+> 若网络受限，可设 `GITHUB_TOKEN` 环境变量提高成功率。
+>
+> 维护者换版本：`bash packaging/make_llama_bundle.sh` 打包当前二进制，
+> 传为新 Release 附件，再更新 `fetch_llama.sh` 里的 `LLAMA_BUILD`。
 
 ### CLI 用法
 
