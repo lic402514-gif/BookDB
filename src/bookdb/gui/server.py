@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -32,6 +33,7 @@ from ..services import citation as citation_service
 from ..services import enrich as enrich_service
 from ..services import enrich_batch
 from ..services import import_export as ie
+from ..services import model as model_service
 from ..services import rename as rename_service
 from ..services import scan as scan_service
 from ..services import search as search_service
@@ -529,6 +531,151 @@ def _h_batch_delete_apply(config: Config, match, query, body) -> dict:
             raise ApiError(str(exc), 400) from exc
 
 
+# ══════════════════════════════════════════════════ 内置模型（AI）
+#: 下载进度（进程内单例 —— 同一时刻只允许一个下载任务）
+_DL: dict = {"key": None, "done": 0, "total": 0, "state": "idle", "error": None}
+_DL_LOCK = threading.Lock()
+_DL_CANCEL = threading.Event()
+
+
+def _model_payload(st) -> dict:
+    spec = st.spec
+    return {
+        "key": spec.key,
+        "name": spec.name,
+        "note": spec.note,
+        "size": spec.total_size,
+        "size_human": model_service.human_size(spec.total_size),
+        "ready": st.ready,
+        "source": st.source,          # 'local' | 'ollama' | 'none'
+        "downloaded": st.downloaded,
+    }
+
+
+def _h_model_list(config, match, query, body) -> dict:
+    from ..llm.adapters import llamacpp
+
+    states = model_service.list_states()
+    return {
+        "items": [_model_payload(s) for s in states],
+        "default": model_service.DEFAULT_KEY,
+        "builtin_model": (config.vlm.builtin_model if config else None),
+        "binary_ready": llamacpp.is_available(),
+        "models_dir": str(model_service.models_dir()),
+    }
+
+
+def _h_model_status(config, match, query, body) -> dict:
+    """当前实际会使用哪个后端（内置 / Ollama / 都不可用）。"""
+    from ..llm.adapters import llamacpp
+    from ..llm.base import ModelUnavailableError
+    from ..services import llm as llm_svc
+
+    vlm = config.vlm
+    out = {
+        "backend": vlm.backend,
+        "builtin_model": vlm.builtin_model,
+        "binary_ready": llamacpp.is_available(),
+        "ollama_endpoint": vlm.endpoint,
+        "ollama_reachable": llm_svc._ollama_reachable(vlm.endpoint),
+        "active": None,
+        "hint": None,
+    }
+    try:
+        adapter = llm_svc.get_adapter(vlm)
+    except ModelUnavailableError as exc:
+        out["hint"] = str(exc)
+    else:
+        name = adapter.__class__.__name__
+        out["active"] = "builtin" if "Llama" in name else "ollama"
+    return out
+
+
+def _h_model_select(config, match, query, body) -> dict:
+    """选择使用哪款内置模型（写回 book.toml 的 [vlm].builtin_model）。"""
+    key = str((body or {}).get("key") or "").strip()
+    if not key:
+        raise ApiError("缺少 key", 400)
+    try:
+        spec = model_service.find(key)
+    except model_service.ModelError as exc:
+        raise ApiError(str(exc), 400) from exc
+
+    if config is None or config.config_path is None:
+        raise ApiError("当前 Library 缺少 book.toml，无法保存设置", 409)
+
+    config.vlm.builtin_model = spec.key
+    config.save()
+    return {"ok": True, "builtin_model": spec.key, "name": spec.name}
+
+
+def _h_model_download(config, match, query, body) -> dict:
+    """启动后台下载（幂等：已在下载则拒绝）。进度用 /api/model/progress 查。"""
+    from ..llm.adapters import llamacpp
+
+    if not llamacpp.is_available():
+        raise ApiError(
+            "未找到内置推理组件（llama-server）。安装版应自带；"
+            "源码运行请先执行 bash packaging/fetch_llama.sh", 409,
+        )
+
+    key = str((body or {}).get("key") or "").strip()
+    try:
+        spec = model_service.find(key)
+    except model_service.ModelError as exc:
+        raise ApiError(str(exc), 400) from exc
+
+    with _DL_LOCK:
+        if _DL["state"] == "running":
+            raise ApiError(f"已有下载任务在进行中（{_DL['key']}）", 409)
+        _DL_CANCEL.clear()
+        _DL.update(key=spec.key, done=0, total=spec.total_size,
+                   state="running", error=None)
+
+    def worker() -> None:
+        try:
+            model_service.download(
+                spec,
+                on_progress=lambda got, total: _DL.update(done=got, total=total),
+                cancel=_DL_CANCEL.is_set,
+            )
+        except Exception as exc:  # noqa: BLE001 - 错误要回传给前端
+            _DL.update(state="error", error=f"{type(exc).__name__}: {exc}")
+        else:
+            _DL.update(state="done", done=spec.total_size)
+
+    threading.Thread(target=worker, daemon=True).start()
+    return {"ok": True, "key": spec.key, "total": spec.total_size,
+            "total_human": model_service.human_size(spec.total_size)}
+
+
+def _h_model_progress(config, match, query, body) -> dict:
+    with _DL_LOCK:
+        snap = dict(_DL)
+    total = snap["total"] or 0
+    snap["percent"] = round(snap["done"] / total * 100, 1) if total else 0.0
+    snap["done_human"] = model_service.human_size(snap["done"])
+    snap["total_human"] = model_service.human_size(total)
+    return snap
+
+
+def _h_model_cancel(config, match, query, body) -> dict:
+    if _DL["state"] != "running":
+        return {"ok": True, "state": _DL["state"]}
+    _DL_CANCEL.set()
+    return {"ok": True, "state": "cancelling"}
+
+
+def _h_model_remove(config, match, query, body) -> dict:
+    key = str((body or {}).get("key") or "").strip()
+    try:
+        spec = model_service.find(key)
+    except model_service.ModelError as exc:
+        raise ApiError(str(exc), 400) from exc
+    freed = model_service.remove(spec)
+    return {"ok": True, "freed": freed, "freed_human": model_service.human_size(freed)}
+
+
 # ─────────────────────────────────────────────────────────── 版权页提取（VLM）
 def _h_enrich(config: Config, match, query, body) -> dict:
     body = body or {}
@@ -752,6 +899,14 @@ ROUTES = [
     ("POST", r"^/api/batch/move/apply$", _h_batch_move_apply),
     ("POST", r"^/api/batch/delete/preview$", _h_batch_delete_preview),
     ("POST", r"^/api/batch/delete/apply$", _h_batch_delete_apply),
+    # 内置模型（AI）
+    ("GET", r"^/api/model/list$", _h_model_list),
+    ("GET", r"^/api/model/status$", _h_model_status),
+    ("GET", r"^/api/model/progress$", _h_model_progress),
+    ("POST", r"^/api/model/select$", _h_model_select),
+    ("POST", r"^/api/model/download$", _h_model_download),
+    ("POST", r"^/api/model/cancel$", _h_model_cancel),
+    ("POST", r"^/api/model/remove$", _h_model_remove),
     ("GET", r"^/api/books$", _h_list),
     ("POST", r"^/api/books$", _h_add),
     ("GET", r"^/api/books/(?P<id>\d+)$", _h_get),

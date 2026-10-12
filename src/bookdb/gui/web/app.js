@@ -901,6 +901,138 @@ function clearFilters() {
   loadList();
 }
 
+/* ══════════════════════════════════════════════════ AI 模型面板 */
+const SRC_LABEL = {
+  local:  ['已下载', 'ok'],
+  ollama: ['复用 Ollama', 'info'],
+  none:   ['未安装', 'warn'],
+};
+
+let dlTimer = null;
+
+async function openAiPanel() {
+  let data;
+  try { data = await api('/api/model/list'); }
+  catch (err) { toast(err.message, true); return; }
+
+  const status = await api('/api/model/status').catch(() => null);
+  const activeText = !status ? '状态未知'
+    : status.active === 'builtin' ? '内置 llama.cpp'
+    : status.active === 'ollama' ? 'Ollama'
+    : '不可用';
+  const cls = status && status.active ? '' : ' bad';
+  const hint = status && status.hint
+    ? `<div class="muted" style="margin-top:6px;white-space:pre-wrap;font-size:12px">${esc(status.hint)}</div>`
+    : '';
+
+  const rows = data.items.map((m) => {
+    const [label, cls2] = SRC_LABEL[m.source] || ['—', ''];
+    const selected = m.key === data.builtin_model;
+    const btn = m.ready
+      ? `<button class="ghost" data-act="remove" data-key="${m.key}">删除${m.source === 'local' ? '' : '（无本地文件）'}</button>
+         <button class="ghost" data-act="select" data-key="${m.key}" ${selected ? 'disabled' : ''}>
+           ${selected ? '✓ 使用中' : '选用此模型'}</button>`
+      : `<button class="primary" data-act="download" data-key="${m.key}">下载（${m.size_human}）</button>`;
+
+    return `<div class="model-row ${selected ? 'active' : ''}">
+      <div class="model-head">
+        <b>${esc(m.name)}</b>
+        <span class="badge ${cls2}">${label}</span>
+        <span class="badge">${m.size_human}</span>
+        ${selected ? '<span class="badge ok">当前选用</span>' : ''}
+      </div>
+      <div class="model-note">${esc(m.note)}</div>
+      <div class="model-actions">${btn}</div>
+    </div>`;
+  }).join('');
+
+  const noBin = data.binary_ready ? '' :
+    `<div class="ai-status bad">未找到内置推理组件（llama-server）。
+      安装版应自带；源码运行请先执行 <code>bash packaging/fetch_llama.sh</code>。</div>`;
+
+  openModal('本地 AI 模型',
+    `<div class="ai-status${cls}">当前将使用：<b>${activeText}</b>${hint}</div>
+     ${noBin}
+     <p class="muted small">AI 功能（版权页提取 / 批量补全）需要本地视觉模型。
+       若你已装过 Ollama 并拉取过同款模型，这里会显示「复用 Ollama」——
+       <b>无需重复下载</b>。</p>
+     ${rows}
+     <div id="dl-box" class="hidden">
+       <div class="dl-track"><div id="dl-fill" class="dl-fill"></div></div>
+       <div class="dl-meta" id="dl-meta"></div>
+     </div>
+     <p class="muted small" style="margin-top:10px">下载目录：${esc(data.models_dir)}</p>`,
+    [{ label: '关闭', onClick: () => { stopDlPoll(); closeModal(); } }]);
+
+  $('#modal-body').onclick = async (e) => {
+    const btn = e.target.closest('button[data-act]');
+    if (!btn) return;
+    const { act, key } = btn.dataset;
+    if (act === 'download') return startDownload(key);
+    if (act === 'select')   return selectModel(key);
+    if (act === 'remove')   return removeModel(key);
+  };
+}
+
+async function selectModel(key) {
+  try {
+    const r = await api('/api/model/select', { method: 'POST', body: { key } });
+    toast(`已选用 ${r.name}`);
+  } catch (err) { toast(err.message, true); return; }
+  openAiPanel();                      // 刷新面板
+}
+
+async function removeModel(key) {
+  try {
+    const r = await api('/api/model/remove', { method: 'POST', body: { key } });
+    toast(r.freed ? `已释放 ${r.freed_human}` : '本地没有可删除的文件');
+  } catch (err) { toast(err.message, true); return; }
+  openAiPanel();
+}
+
+async function startDownload(key) {
+  try {
+    const r = await api('/api/model/download', { method: 'POST', body: { key } });
+    toast(`开始下载（${r.total_human}）——可关闭本窗口，下载会继续`);
+  } catch (err) { toast(err.message, true); return; }
+  $('#dl-box').classList.remove('hidden');
+  startDlPoll(key);
+}
+
+function startDlPoll(key) {
+  stopDlPoll();
+  const tick = async () => {
+    let p;
+    try { p = await api('/api/model/progress'); }
+    catch { return; }
+    const box = $('#dl-box');
+    if (!box) { stopDlPoll(); return; }        // 面板已关
+    box.classList.remove('hidden');
+    $('#dl-fill').style.width = `${p.percent || 0}%`;
+    if (p.state === 'running') {
+      $('#dl-meta').textContent =
+        `下载中… ${p.done_human} / ${p.total_human}（${p.percent}%）`;
+    } else if (p.state === 'done') {
+      $('#dl-meta').textContent = '✓ 下载完成';
+      stopDlPoll();
+      toast('模型下载完成，现在可以使用 AI 提取了');
+      setTimeout(openAiPanel, 800);
+    } else if (p.state === 'error') {
+      $('#dl-meta').textContent = `✗ 失败：${p.error || ''}`;
+      stopDlPoll();
+      toast('下载失败（可重试，支持断点续传）', true);
+    } else {
+      stopDlPoll();
+    }
+  };
+  tick();
+  dlTimer = setInterval(tick, 1000);
+}
+
+function stopDlPoll() {
+  if (dlTimer) { clearInterval(dlTimer); dlTimer = null; }
+}
+
 /* ══════════════════════════════════════════════ 批量操作（重命名/移动/删除） */
 const BATCH_STATUS = {
   rename:    ['将改名', 'st-ok'],
@@ -1147,6 +1279,9 @@ function bind() {
   $('#btn-b-delmeta').onclick = () => batchDelete(false);
   $('#btn-b-delfile').onclick = () => batchDelete(true);
   $('#btn-b-clear').onclick = clearSelection;
+
+  // AI 模型面板
+  $('#btn-ai').onclick = openAiPanel;
 }
 
 /** 启动流程：无书库 → 欢迎页；有书库 → 正常界面。 */

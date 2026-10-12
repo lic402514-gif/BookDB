@@ -96,6 +96,34 @@ td.sel input { cursor: pointer; }
 .danger-box ul { margin: 6px 0; padding-left: 20px; max-height: 200px; overflow: auto; }
 .danger-box li { font-size: 12px; }
 
+/* ─────────────────────────────────── AI 模型面板 */
+.model-row {
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px 12px; margin-bottom: 8px; background: var(--panel);
+}
+.model-row.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.model-head { display: flex; align-items: center; gap: 8px; }
+.model-head b { font-size: 14px; }
+.model-note { color: var(--muted); font-size: 12px; margin: 4px 0 8px; }
+.model-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.badge {
+  font-size: 11px; padding: 1px 7px; border-radius: 10px;
+  border: 1px solid var(--line); color: var(--muted);
+}
+.badge.ok   { border-color: var(--accent); color: var(--accent); }
+.badge.info { border-color: #2b7fd1; color: #2b7fd1; }
+.badge.warn { border-color: #b8860b; color: #b8860b; }
+
+.dl-track { height: 8px; border-radius: 4px; background: var(--accent-soft); overflow: hidden; margin: 8px 0 4px; }
+.dl-fill  { height: 100%; background: var(--accent); width: 0; transition: width .3s; }
+.dl-meta  { font-size: 12px; color: var(--muted); }
+
+.ai-status {
+  padding: 8px 10px; border-radius: 8px; margin-bottom: 12px; font-size: 13px;
+  background: var(--accent-soft); border: 1px solid var(--line);
+}
+.ai-status.bad { background: #fff5f5; border-color: var(--danger); }
+
 /* ─────────────────────────────────── 欢迎页（P0：尚未打开 Library） */
 .welcome {
   position: fixed; inset: 0; z-index: 50;
