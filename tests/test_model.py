@@ -22,10 +22,19 @@ from bookdb.services import model as model_service  # noqa: E402
 
 
 # ═══════════════════════════════════════════════════════ 清单
-def test_catalog_has_three_tiers():
+def test_catalog_has_two_tiers():
+    """只收录实测可用的两款（MiniCPM-V 实测返回空输出，已剔除）。"""
     keys = [s.key for s in model_service.CATALOG]
-    assert keys == ["3b", "7b", "mini"]
+    assert keys == ["3b", "7b"]
     assert model_service.DEFAULT_KEY == "3b"
+
+
+def test_catalog_default_matches_ollama_common_setup():
+    """默认 3b 与用户 Ollama 常用的 `qwen2.5vl:3b` 是同一模型 —— 质量一致。"""
+    spec = model_service.find(model_service.DEFAULT_KEY)
+    assert "Qwen2.5-VL-3B" in spec.model.filename
+    assert model_service.find_ollama_model.__name__     # 存在复用能力
+    assert model_service._OLLAMA_TAGS["3b"] == "qwen2.5vl:3b"
 
 
 def test_catalog_entries_are_complete():
@@ -97,6 +106,54 @@ def test_ollama_manifest_reads_blob_layout(tmp_path, monkeypatch):
     assert got[1].name == f"sha256-{proj_digest}"
 
 
+def test_ollama_manifest_recurses_into_sub_manifest(tmp_path, monkeypatch):
+    """实测结构：顶层 `layers` 只有 model，视觉层在内嵌的子清单里。
+
+    `qwen2.5vl:3b` 的真实结构：
+        顶层 layers → model + template/system/license/params
+                      + 三个 mediaType 含 'manifest' 的子清单
+        视觉投影层在『llamacpp 引擎』那个子清单的 layers 里（projector）。
+    不递归就会永远找不到 mmproj。
+    """
+    blobs = tmp_path / "models" / "blobs"
+    blobs.mkdir(parents=True)
+    main_d, proj_d, sub_d = "1" * 64, "2" * 64, "3" * 64
+    for d in (main_d, proj_d, sub_d):
+        (blobs / f"sha256-{d}").write_bytes(b"GGUF")
+
+    # 子清单：含视觉投影层
+    (blobs / f"sha256-{sub_d}").write_text(json.dumps({"layers": [
+        {"mediaType": "application/vnd.ollama.image.model", "digest": f"sha256:{main_d}"},
+        {"mediaType": "application/vnd.ollama.image.projector", "digest": f"sha256:{proj_d}"},
+    ]}), encoding="utf-8")
+
+    # 顶层清单：只有 model + 一个内嵌子清单（**没有** projector）
+    manifest = tmp_path / "models" / "manifests" / "registry.ollama.ai" / "library" / "qwen2.5vl" / "3b"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({
+        "mediaType": "application/vnd.ollama.manifest.list.v2+json",
+        "layers": [
+            {"mediaType": "application/vnd.ollama.image.model", "digest": f"sha256:{main_d}"},
+            {"mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+             "digest": f"sha256:{sub_d}"},
+        ],
+    }), encoding="utf-8")
+
+    monkeypatch.setattr(model_service, "ollama_blobs_dir", lambda: blobs)
+    got = model_service.ollama_manifest("qwen2.5vl:3b")
+    assert got is not None, "必须递归进子清单才能找到 mmproj"
+    assert got[0].name == f"sha256-{main_d}"
+    assert got[1].name == f"sha256-{proj_d}"
+
+
+def test_media_kind_keeps_manifest_keyword():
+    """⚠️ 回归：`rsplit('.', 1)[-1]` 会把 manifest 丢成 'v2+json'（踩过）。"""
+    assert model_service._media_kind(
+        "application/vnd.docker.distribution.manifest.v2+json") == "manifest"
+    assert model_service._media_kind("application/vnd.ollama.image.projector") == "projector"
+    assert model_service._media_kind("application/vnd.ollama.image.model") == "model"
+
+
 def test_ollama_manifest_none_when_absent(tmp_path, monkeypatch):
     blobs = tmp_path / "blobs"
     blobs.mkdir()
@@ -135,7 +192,7 @@ def test_remove_deletes_files_and_empty_dir(tmp_path, monkeypatch):
 
 def test_remove_tolerates_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(model_service, "models_dir", lambda: tmp_path / "models")
-    assert model_service.remove(model_service.find("mini")) == 0
+    assert model_service.remove(model_service.find("7b")) == 0
 
 
 # ═══════════════════════════════════════════════════════ 下载

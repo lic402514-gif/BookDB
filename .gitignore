@@ -27,3 +27,6 @@ Thumbs.db
 # 打包中间产物（bootstrapper 由脚本按需下载；图标由脚本生成）
 packaging/bootstrapper/
 packaging/assets/bookdb.ico
+
+# 内置推理组件（由 packaging/fetch_llama.sh 下载，48MB，不入库）
+vendor/llama/

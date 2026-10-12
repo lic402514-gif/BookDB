@@ -82,11 +82,20 @@ def _f(repo: str, filename: str, size: int) -> ModelFile:
 
 
 #: 内置模型清单（体积为实测值，来自 HF 镜像 API）
+#:
+#: 只列**实测能胜任结构化提取**的模型：
+#:   · Qwen2.5-VL 3B —— 与用户 Ollama 常用的 `qwen2.5vl:3b` 是同一模型，
+#:     实测对版权页能稳定输出合规 JSON（书名/作者/年份/ISBN 全对）。
+#:   · Qwen2.5-VL 7B —— 同系列更大版本，质量优先。
+#:
+#: ⚠️ 曾计划收录 MiniCPM-V 4.6（更小），但**实测不可用**：
+#:    简短提问（"这图里有什么文字"）能答，但本项目所用的结构化 JSON 提示词
+#:    会让它输出**空字符串** —— 不适合本任务，故不收录。
 CATALOG: tuple[ModelSpec, ...] = (
     ModelSpec(
         key="3b",
         name="Qwen2.5-VL 3B",
-        note="推荐 · 速度与质量的平衡",
+        note="推荐 · 与常见 Ollama 配置同款，速度与质量的平衡",
         model=_f("ggml-org/Qwen2.5-VL-3B-Instruct-GGUF",
                  "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf", 1_930_373_216),
         mmproj=_f("ggml-org/Qwen2.5-VL-3B-Instruct-GGUF",
@@ -95,20 +104,11 @@ CATALOG: tuple[ModelSpec, ...] = (
     ModelSpec(
         key="7b",
         name="Qwen2.5-VL 7B",
-        note="质量优先 · 占用较大（约 5.5 GB）",
+        note="质量优先 · 约 5.5 GB，内存 16 GB 以上更合适",
         model=_f("ggml-org/Qwen2.5-VL-7B-Instruct-GGUF",
                  "Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf", 4_680_000_000),
         mmproj=_f("ggml-org/Qwen2.5-VL-7B-Instruct-GGUF",
                   "mmproj-Qwen2.5-VL-7B-Instruct-Q8_0.gguf", 853_120_000),
-    ),
-    ModelSpec(
-        key="mini",
-        name="MiniCPM-V 4.6",
-        note="轻量 · 约 1.3 GB，适合配置较低的机器",
-        model=_f("ggml-org/MiniCPM-V-4.6-GGUF",
-                 "MiniCPM-V-4.6-Q4_K_M.gguf", 529_100_000),
-        mmproj=_f("ggml-org/MiniCPM-V-4.6-GGUF",
-                  "mmproj-MiniCPM-V-4.6-Q8_0.gguf", 727_950_000),
     ),
 )
 
@@ -153,6 +153,83 @@ def ollama_blobs_dir() -> Path | None:
     return None
 
 
+def _read_layers(path: Path) -> dict | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _media_kind(media_type: str) -> str:
+    """从 mediaType 里取「层类型」。
+
+    ⚠️ 不能简单 `rsplit('.', 1)[-1]` —— 实测
+       `application/vnd.docker.distribution.manifest.v2+json` 会得到 `'v2+json'`，
+       把关键的 `manifest` 丢掉。这里按已知后缀显式匹配。
+    """
+    mt = media_type.lower()
+    for kind in ("projector", "mmproj", "model", "manifest"):
+        if kind in mt:
+            return kind
+    return mt.rsplit(".", 1)[-1]
+
+
+def _layers_of(blobs: Path, manifest: Path, depth: int = 0) -> tuple[Path, Path] | None:
+    """从一个 manifest 里取出 (主模型, 视觉投影层)；必要时**递归进子 manifest**。
+
+    Ollama 的清单是多层的（实测 `qwen2.5vl:3b`）：
+        顶层 `layers`：model（**ggml 引擎版**，llama.cpp 加载会报
+                       `unknown model architecture: 'qwen25vl'`）
+                      + template/system/license/params
+                      + 若干 mediaType 含 `manifest` 的子清单
+        每个子清单对应一个引擎（ggml / llamacpp），**llamacpp 那份**才同时含
+        `model`(Q4_K_M) + `projector`(mmproj) —— 那才是 llama-server 能用的。
+
+    ⚠️ 关键：**不能见到 model 就用**。必须要求「与该 model 配对的 projector 存在」，
+    否则会挑到 ggml 版（无 projector），启动时才炸。
+    """
+
+    def scan(entries, depth_: int):
+        """扫一层 entries，返回该层直接看到的 (model, projector, 子清单候选)。"""
+        model = projector = None
+        subs: list[Path] = []
+        for entry in entries or []:
+            kind = _media_kind(str(entry.get("mediaType", "")))
+            digest = str(entry.get("digest", "")).replace("sha256:", "")
+            path = blobs / f"sha256-{digest}"
+            if not path.is_file():
+                continue
+            if kind == "model":
+                model = model or path
+            elif kind in ("projector", "mmproj"):
+                projector = projector or path
+            elif kind == "manifest" and depth_ < 3:
+                subs.append(path)
+        return model, projector, subs
+
+    data = _read_layers(manifest)
+    if data is None or depth > 3:
+        return None
+
+    # 先看子清单（引擎专属的那份通常最完整），再回退到本层
+    everything = [data.get("layers"), data.get("manifests")]
+    for entries in everything:
+        _m, _p, subs = scan(entries, depth)
+        for sub in subs:
+            got = _layers_of(blobs, sub, depth + 1)
+            if got:
+                return got                      # 子清单里成对出现 → 正是可用的那份
+
+    # 本层自身成对（简单结构，或已递归到底）
+    for entries in everything:
+        model, projector, _ = scan(entries, depth)
+        if model and projector:
+            return (model, projector)
+
+    return None
+
+
 def ollama_manifest(model_tag: str) -> tuple[Path, Path] | None:
     """在 Ollama 里找 `model_tag`（如 `qwen2.5vl:3b`）的 (主模型, mmproj)。
 
@@ -166,36 +243,19 @@ def ollama_manifest(model_tag: str) -> tuple[Path, Path] | None:
     name, _, tag = model_tag.partition(":")
     tag = tag or "latest"
     manifest = blobs.parent / "manifests" / "registry.ollama.ai" / "library" / name / tag
-    if not manifest.is_file():
-        return None
+    return _layers_of(blobs, manifest) if manifest.is_file() else None
 
-    try:
-        data = json.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
 
-    layers = data.get("layers") or []
-    model = projector = None
-    for layer in layers:
-        kind = str(layer.get("mediaType", "")).rsplit(".", 1)[-1]
-        digest = str(layer.get("digest", "")).replace("sha256:", "")
-        path = blobs / f"sha256-{digest}"
-        if not path.is_file():
-            continue
-        if kind == "model":
-            model = path
-        elif kind in ("projector", "mmproj"):
-            projector = path
-    return (model, projector) if model and projector else None
+#: 内置 key → 对应的 Ollama tag（用于「复用已下载的 Ollama 模型」）
+_OLLAMA_TAGS = {
+    "3b": "qwen2.5vl:3b",
+    "7b": "qwen2.5vl:7b",
+}
 
 
 def find_ollama_model(spec: ModelSpec) -> tuple[Path, Path] | None:
     """按内置清单的模型名，尝试在 Ollama 里找到**等价**模型（复用以省下载）。"""
-    by_key = {
-        "3b": "qwen2.5vl:3b",
-        "7b": "qwen2.5vl:7b",
-    }
-    tag = by_key.get(spec.key)
+    tag = _OLLAMA_TAGS.get(spec.key)
     return ollama_manifest(tag) if tag else None
 
 

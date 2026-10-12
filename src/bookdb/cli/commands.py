@@ -40,6 +40,11 @@ app = typer.Typer(
 console = Console()
 err_console = Console(stderr=True)
 
+#: 子命令组：`book model ...`（内置本地模型管理，PRD §17）
+from .model_cmd import app as model_app  # noqa: E402
+
+app.add_typer(model_app, name="model")
+
 
 # ══════════════════════════════════════════════════════════════════════ helpers
 def _load_config(ctx: typer.Context) -> Config:

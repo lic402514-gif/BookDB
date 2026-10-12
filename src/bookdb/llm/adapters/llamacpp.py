@@ -40,13 +40,26 @@ _LIVE: list["LlamaServerAdapter"] = []
 _LOCK = threading.Lock()
 
 
+def _repo_root() -> Path | None:
+    """源码仓库根（`<repo>/src/bookdb/llm/adapters/llamacpp.py` 上溯 4 级）。
+
+    打包后该路径不再有意义，故仅作开发期兜底。
+    """
+    try:
+        root = Path(__file__).resolve().parents[4]
+    except IndexError:            # pragma: no cover
+        return None
+    return root if (root / "src" / "bookdb").is_dir() else None
+
+
 def find_server_exe() -> Path | None:
     """定位 llama-server 可执行文件。
 
     查找顺序：
-      1. 环境变量 `BOOKDB_LLAMA_SERVER`（测试/自定义用）
+      1. 环境变量 `BOOKDB_LLAMA_SERVER`（测试 / 自定义）
       2. 打包位置：`sys._MEIPASS/llama/llama-server.exe`（安装版）
-      3. 源码同级：`<repo>/vendor/llama/llama-server.exe`（开发用）
+      3. 源码仓库：`<repo>/vendor/llama/llama-server.exe`（开发用，
+         由 `packaging/fetch_llama.sh` 放置）
     """
     import os
 
@@ -58,7 +71,9 @@ def find_server_exe() -> Path | None:
     base = getattr(sys, "_MEIPASS", None)
     if base:
         candidates.append(Path(base) / "llama" / "llama-server.exe")
-    candidates.append(Path(__file__).resolve().parents[3] / "vendor" / "llama" / "llama-server.exe")
+    root = _repo_root()
+    if root is not None:
+        candidates.append(root / "vendor" / "llama" / "llama-server.exe")
 
     for path in candidates:
         if path.is_file():
