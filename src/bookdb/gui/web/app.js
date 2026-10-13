@@ -497,30 +497,38 @@ const dim = (v) => (v === null || v === undefined || v === '') ? '(空)' : Strin
 /* ══════════════════════════════════════════════════════ 导出 */
 function exportData() {
   openModal('导出',
-    '<p>选择导出格式（JSON 含 mode:full，可直接回灌）：</p>',
+    '<p>选择导出格式（JSON 含 mode:full，可直接回灌）：</p>' +
+    '<p class="muted small">文件会写入书库目录下的 <code>exports/</code> 文件夹，' +
+    '导出后会显示完整路径。</p>',
     [{ label: '取消', onClick: closeModal },
      { label: 'JSON', onClick: () => doExport('json') },
      { label: 'CSV', primary: true, onClick: () => doExport('csv') }]);
 }
 
 async function doExport(format) {
+  let r;
   try {
-    const r = await api(`/api/export?format=${format}`);
-    closeModal();
-    download(`books.${format}`, r.content);
-    toast(`已导出 ${format.toUpperCase()}`);
-  } catch (err) { toast(err.message, true); }
+    r = await api(`/api/export?format=${format}`);
+  } catch (err) { toast(err.message, true); return; }
+
+  // 明确告诉用户文件落在哪 —— 不再依赖浏览器下载（落点不可控）
+  openModal('导出完成',
+    `<p>已导出 <b>${r.name}</b>（${formatBytes(r.bytes)}）</p>
+     <p class="muted small" style="word-break:break-all">${esc(r.path)}</p>`,
+    [{ label: '关闭', onClick: closeModal },
+     { label: '打开所在文件夹', primary: true, onClick: async () => {
+         try { await api('/api/export/reveal', { method: 'POST' }); }
+         catch (err) { toast(err.message, true); }
+       } }]);
+  toast(`已导出到 ${r.dir}`);
 }
 
-function download(filename, text) {
-  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+function formatBytes(n) {
+  if (!n) return '0 B';
+  const u = ['B', 'KB', 'MB', 'GB'];
+  let i = 0, v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
 }
 
 /* ══════════════════════════════════════════════════════ 版权页提取 */

@@ -60,6 +60,11 @@ def _web_dir() -> Path:
 
 WEB_DIR = _web_dir()
 
+#: 导出文件目录名（位于书库根下的子目录）。
+#: ⚠️ 不用浏览器下载 —— pywebview 的下载落点不可控（可能进系统「下载」文件夹），
+#: 用户会"找不到导出到哪了"。直接写进书库目录，路径确定且好找。
+EXPORT_DIRNAME = "exports"
+
 #: 无 Library 时**仍可访问**的接口（欢迎页 + 应用级设置需要它们）。
 #: 其余数据类接口在无库时返回 409 + no_library，前端据此回欢迎页。
 #:
@@ -272,12 +277,46 @@ def _h_search(config: Config, match, query, body) -> dict:
 
 
 def _h_export(config: Config, match, query, body) -> dict:
+    """导出全部记录到**书库目录**下的 `exports/`（绕过浏览器下载的不确定性）。
+
+    返回写入的绝对路径，前端据此提示用户（并可一键打开所在文件夹）。
+    文件名带时间戳，重复导出不会互相覆盖。
+    """
+    from datetime import datetime
+
     fmt = (query.get("format", ["json"])[0] or "json").lower()
     if fmt not in ("json", "csv"):
         raise ApiError(f"不支持的格式：{fmt}（仅 json / csv）", 400)
     with Context.open(config) as ctx:
         content = ie.export_json(ctx, pretty=True) if fmt == "json" else ie.export_csv(ctx)
-    return {"format": fmt, "content": content}
+
+    root = config.library_root or Path.cwd()
+    out_dir = Path(root) / EXPORT_DIRNAME
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    target = out_dir / f"bookdb-export-{stamp}.{fmt}"
+    try:
+        target.write_text(content, encoding="utf-8")
+    except OSError as exc:
+        raise ApiError(f"写入导出文件失败：{target}（{exc}）", 500) from exc
+
+    return {
+        "format": fmt,
+        "path": str(target),
+        "dir": str(out_dir),
+        "name": target.name,
+        "bytes": len(content.encode("utf-8")),
+    }
+
+
+def _h_export_reveal(config: Config, match, query, body) -> dict:
+    """在文件管理器中打开导出目录。"""
+    root = config.library_root or Path.cwd()
+    out_dir = Path(root) / EXPORT_DIRNAME
+    out_dir.mkdir(parents=True, exist_ok=True)
+    launch(str(out_dir))
+    return {"ok": True, "dir": str(out_dir)}
 
 
 def _h_cite(config: Config, match, query, body) -> dict:
@@ -1011,6 +1050,7 @@ ROUTES = [
     ("DELETE", r"^/api/books/(?P<id>\d+)$", _h_delete),
     ("GET", r"^/api/search$", _h_search),
     ("GET", r"^/api/export$", _h_export),
+    ("POST", r"^/api/export/reveal$", _h_export_reveal),
     ("GET", r"^/api/cite/(?P<id>\d+)$", _h_cite),
     ("POST", r"^/api/open/(?P<id>\d+)$", _h_open_file),
     ("POST", r"^/api/reveal/(?P<id>\d+)$", _h_open_folder),

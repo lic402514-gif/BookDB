@@ -220,6 +220,64 @@ def test_frontend_has_first_run_ai_hint(api):
     assert "checkAiReady()" in js            # 启动流程里被调用
 
 
+# ──────────────────────────────── 导出写入书库目录（不靠浏览器下载）
+def test_export_writes_into_library(api, tmp_path):
+    """⚠️ GUI 导出必须落到书库目录下的 exports/，并返回可读路径。
+
+    以前走浏览器下载 —— pywebview 的落点不可控（可能进系统「下载」文件夹），
+    用户会"找不到导出到哪了"。
+    """
+    import json
+
+    root = api.config.library_root
+    status, r = api.call("GET", "/api/export?format=json")
+    assert status == 200, r
+    assert r["format"] == "json"
+    assert r["name"].startswith("bookdb-export-") and r["name"].endswith(".json")
+
+    written = Path(r["path"])
+    assert written.is_file(), f"导出文件不存在：{written}"
+    assert written.parent == Path(root) / "exports"
+    assert written.parent == Path(r["dir"])
+    json.loads(written.read_text(encoding="utf-8"))     # 内容是合法 JSON
+    assert r["bytes"] > 0
+
+
+def test_export_csv_also_into_library(api):
+    root = api.config.library_root
+    status, r = api.call("GET", "/api/export?format=csv")
+    assert status == 200
+    written = Path(r["path"])
+    assert written.suffix == ".csv" and written.parent == Path(root) / "exports"
+
+
+def test_export_rejects_bad_format(api):
+    status, r = api.call("GET", "/api/export?format=xml")
+    assert status == 400 and "不支持" in r["error"]
+
+
+def test_export_reveal_opens_dir(api, monkeypatch):
+    """reveal 只负责打开目录，不该在测试里真弹资源管理器。"""
+    from bookdb.gui import server as server_mod
+
+    opened = []
+    monkeypatch.setattr(server_mod, "launch", lambda p: opened.append(p))
+
+    status, r = api.call("POST", "/api/export/reveal", {})
+    assert status == 200
+    assert r["dir"] == str(Path(api.config.library_root) / "exports")
+    assert opened == [r["dir"]]
+
+
+def test_frontend_export_shows_path_not_download(api):
+    """前端应展示导出路径 + 提供「打开所在文件夹」，不再用 a.download。"""
+    js = api.text("/app.js")
+    assert "打开所在文件夹" in js
+    assert "/api/export/reveal" in js
+    assert "exportData" in js
+    assert "a.download" not in js           # 已弃用浏览器下载
+
+
 # ──────────────────────────────── 无库时也要能管理模型（应用级资源）
 @pytest.fixture()
 def api_no_library(tmp_path: Path):
@@ -235,11 +293,18 @@ def api_no_library(tmp_path: Path):
         server.server_close()
 
 
-def test_model_endpoints_work_without_library(api_no_library):
+def test_model_endpoints_work_without_library(api_no_library, monkeypatch):
     """⚠️ 回归：模型是应用级资源（存 %APPDATA%），无库时也必须可用。
 
     否则用户在欢迎页点「🧠 AI 模型」会拿到 409，面板整个用不了。
+
+    ⚠️ 必须 mock 掉 `_ollama_reachable` —— 它是**真实网络探测**（1.5s 超时），
+       本机 Ollama 忙时会让此测试**偶发失败**（实测踩过）。测试不该依赖外部服务。
     """
+    from bookdb.services import llm as llm_service
+
+    monkeypatch.setattr(llm_service, "_ollama_reachable", lambda ep: False)
+
     for path in ("/api/model/list", "/api/model/status", "/api/model/progress"):
         status, data = api_no_library.call("GET", path)
         assert status == 200, f"{path} → {status} {data}"

@@ -170,13 +170,20 @@ def test_search(api):
 
 # ─────────────────────────────────────────────────────────────── 导出
 def test_export_json_and_csv(api):
+    """导出改为**写进书库目录**（不再返回内容给浏览器下载）。"""
     add(api)
+    from pathlib import Path
+
     status, payload = api.call("GET", "/api/export?format=json")
     assert status == 200 and payload["format"] == "json"
-    assert json.loads(payload["content"])["mode"] == "full"
+    jpath = Path(payload["path"])
+    assert jpath.is_file() and jpath.parent == Path(api.config.library_root) / "exports"
+    assert json.loads(jpath.read_text(encoding="utf-8"))["mode"] == "full"
 
     status, payload = api.call("GET", "/api/export?format=csv")
-    assert status == 200 and payload["content"].startswith("id,title")
+    assert status == 200
+    cpath = Path(payload["path"])
+    assert cpath.is_file() and cpath.read_text(encoding="utf-8").startswith("id,title")
 
     status, payload = api.call("GET", "/api/export?format=xml")
     assert status == 400

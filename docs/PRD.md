@@ -1181,7 +1181,8 @@ GET    /api/books/{id}               详情（含摘要）
 PUT    /api/books/{id}               编辑（局部）
 DELETE /api/books/{id}               删除
 GET    /api/search                   检索（q/author/year/clc/type/publisher/has_file）
-GET    /api/export?format=json|csv   导出（返回文本内容）
+GET    /api/export?format=json|csv   导出到书库目录的 exports/（返回写入路径）
+POST   /api/export/reveal            在文件管理器中打开导出目录
 GET    /api/cite/{id}                引用
 POST   /api/open/{id}                用系统默认程序打开关联文件
 POST   /api/reveal/{id}              在文件管理器中定位关联文件
