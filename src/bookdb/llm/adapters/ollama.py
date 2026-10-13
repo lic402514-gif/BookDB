@@ -35,6 +35,20 @@ class OllamaAdapter(VLMAdapter):
             "stream": False,
             "options": {"temperature": 0},
         }
+        return self._chat(url, payload)
+
+    def chat_text(self, prompt: str) -> str:
+        """**纯文本**对话（MinerU 文本流程用）—— 不发图。"""
+        url = f"{self.endpoint.rstrip('/')}/api/chat"
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
+            "options": {"temperature": 0},
+        }
+        return self._chat(url, payload)
+
+    def _chat(self, url: str, payload: dict) -> str:
         request = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),

@@ -25,3 +25,11 @@ class VLMAdapter(ABC):
     @abstractmethod
     def describe_image(self, image: bytes, prompt: str) -> str:
         """把图像 + 提示交给模型，返回其原始文本输出。"""
+
+    def chat_text(self, prompt: str) -> str:
+        """**纯文本**对话（不喂图）—— 供 MinerU 文本流程使用。
+
+        与 `describe_image` 同源的模型即可胜任（多模态模型都支持纯文本）。
+        默认实现抛 NotImplementedError，由适配器各自覆盖。
+        """
+        raise NotImplementedError(f"{type(self).__name__} 不支持纯文本对话")

@@ -476,7 +476,7 @@ def test_acquire_rebuilds_when_process_died(monkeypatch, tmp_path):
 def test_models_dir_default_is_not_roaming_appdata(monkeypatch, tmp_path):
     """⚠️ 回归：默认模型目录**不得**在 %APPDATA%（漫游）里。
 
-    模型是 GB 级文件，放 `%APPDATA%\BookDB\models` 会迅速吃满 C 盘
+    模型是 GB 级文件，放 %APPDATA% 下的 BookDB\models 会迅速吃满 C 盘
     （实测教训：7B 占 5.2GB，C 盘只剩 13GB）。默认应为 `%LOCALAPPDATA%`。
     """
     from bookdb.gui import settings as st
@@ -501,3 +501,64 @@ def test_settings_roundtrip_models_dir(tmp_path, monkeypatch):
     s = st.Settings(path=p, models_dir=r"D:\BookDB\models")
     s.save()
     assert st.Settings.load(p).models_dir == r"D:\BookDB\models"
+
+
+# ═══════════════════════════════════════════ 纯文本对话（MinerU 流程用）
+def test_base_chat_text_not_implemented_by_default():
+    """基类默认不支持纯文本 —— 子类必须显式实现（避免静默走错路径）。"""
+    from bookdb.llm.base import VLMAdapter
+
+    class Bare(VLMAdapter):
+        def describe_image(self, image, prompt):
+            return ""
+
+    with pytest.raises(NotImplementedError):
+        Bare(endpoint="x", model="y").chat_text("hello")
+
+
+def test_llamacpp_has_chat_text():
+    from bookdb.llm.adapters.llamacpp import LlamaServerAdapter
+
+    assert callable(getattr(LlamaServerAdapter, "chat_text", None))
+
+
+def test_ollama_has_chat_text():
+    from bookdb.llm.adapters.ollama import OllamaAdapter
+
+    assert callable(getattr(OllamaAdapter, "chat_text", None))
+
+
+def test_chat_text_payload_has_no_image(monkeypatch):
+    """⚠️ chat_text 发的请求**不得含图片**（纯文本，成本远低于看图）。"""
+    from bookdb.llm.adapters.llamacpp import LlamaServerAdapter
+
+    sent = {}
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {"choices": [{"message": {"content": '{"ok":true}'}}]}
+            ).encode()
+
+    def fake_urlopen(req, timeout=None):
+        sent["body"] = json.loads(req.data.decode("utf-8"))
+        return FakeResp()
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    a = LlamaServerAdapter(model_path="m", mmproj_path="p")
+    monkeypatch.setattr(a, "start", lambda: None)
+    a._port = 1234
+
+    out = a.chat_text("纯文本提示")
+    assert out == '{"ok":true}'
+    content = sent["body"]["messages"][0]["content"]
+    assert isinstance(content, str), "content 必须是纯字符串（不是含 image_url 的列表）"
+    assert "image" not in json.dumps(sent["body"]).lower()

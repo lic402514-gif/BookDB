@@ -287,6 +287,43 @@ class LlamaServerAdapter(VLMAdapter):
                 pass
 
     # ────────────────────────────────────────────────── 推理
+    def chat_text(self, prompt: str, *, max_tokens: int = 1024) -> str:
+        """**纯文本**对话（MinerU 文本流程用）—— 不发图，成本远低于看图。
+
+        与 describe_image 走同一个 llama-server，只是 content 为纯字符串。
+        """
+        self.start()
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0,
+            "max_tokens": max_tokens,
+        }
+        req = urllib.request.Request(
+            f"{self.base_url}/v1/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "ignore")
+            raise ModelUnavailableError(
+                f"内置推理服务返回错误 {exc.code}：{detail[:200]}"
+            ) from exc
+        except (urllib.error.URLError, ConnectionError, TimeoutError, OSError) as exc:
+            raise ModelUnavailableError(
+                f"无法连接内置推理服务 {self.base_url}：{exc}"
+            ) from exc
+        try:
+            return body["choices"][0]["message"]["content"]
+        except (KeyError, IndexError) as exc:
+            raise ModelUnavailableError(
+                f"内置推理服务响应异常：{json.dumps(body, ensure_ascii=False)[:200]}"
+            ) from exc
+
     def describe_image(self, image: bytes, prompt: str) -> str:
         self.start()
         payload = {
