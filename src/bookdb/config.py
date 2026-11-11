@@ -10,7 +10,8 @@
   model    = "qwen2.5-vl:3b"
   backend  = "auto"                 # auto / builtin / ollama / deepseek
   deepseek_endpoint = "https://api.deepseek.com"
-  deepseek_model    = "deepseek-chat"
+  deepseek_model    = "deepseek-flash"   # deepseek-flash 支持读图；v4-pro 只支持文本
+  deepseek_vision   = true               # 扫描件是否允许渲染成图上传
 
 配置查找顺序：
   1. 命令行 --config 显式指定
@@ -36,9 +37,11 @@ class VlmConfig:
       · `auto`     —— 内置 llama.cpp 就绪就用它，否则回退到已启动的 Ollama（默认）
       · `builtin`  —— 只用内置模型
       · `ollama`   —— 只用 Ollama
-      · `deepseek` —— 只用 DeepSeek 云端**文本**模型（不读图；Key 走环境变量）
+      · `deepseek` —— 只用 DeepSeek 云端模型（`deepseek-flash` 文本 + 视觉）
     `builtin_model` 为内置模型的 key（见 `services/model.CATALOG`）。
     `deepseek_*` 只在 `backend = "deepseek"` 时生效，可指向任何 OpenAI 兼容端点。
+    `deepseek_vision`：PDF **没有文本层**（扫描件）时，是否允许把页面渲染成图上传给
+    DeepSeek Vision（默认允许；关掉后扫描件会明确报错，只走文字流程）。
     """
 
     endpoint: str = "http://127.0.0.1:11434"
@@ -46,7 +49,8 @@ class VlmConfig:
     backend: str = "auto"
     builtin_model: str = "3b"
     deepseek_endpoint: str = "https://api.deepseek.com"
-    deepseek_model: str = "deepseek-chat"
+    deepseek_model: str = "deepseek-flash"
+    deepseek_vision: bool = True
 
 
 @dataclass
@@ -99,6 +103,8 @@ class Config:
             cfg.vlm.deepseek_endpoint = str(vlm["deepseek_endpoint"])
         if vlm.get("deepseek_model"):
             cfg.vlm.deepseek_model = str(vlm["deepseek_model"])
+        if isinstance(vlm.get("deepseek_vision"), bool):
+            cfg.vlm.deepseek_vision = vlm["deepseek_vision"]
 
         return cfg
 
@@ -131,6 +137,7 @@ class Config:
             f'builtin_model = "{self.vlm.builtin_model}"',
             f'deepseek_endpoint = "{self.vlm.deepseek_endpoint}"',
             f'deepseek_model = "{self.vlm.deepseek_model}"',
+            f'deepseek_vision = {str(self.vlm.deepseek_vision).lower()}',
             "",
         ]
         path.write_text("\n".join(lines), encoding="utf-8")

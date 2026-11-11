@@ -137,7 +137,7 @@ def get_adapter(vlm: VlmConfig, *, probe: bool = False) -> VLMAdapter:
         两者都不可用 → 明确报错并给出**可操作的**指引（不静默降级）。
       · `builtin` —— 强制内置；未就绪直接报错。
       · `ollama`  —— 强制 Ollama。
-      · `deepseek` —— 强制 DeepSeek 云端**文本**模型（不支持读图；
+      · `deepseek` —— 强制 DeepSeek 云端模型（`deepseek-flash`：文本 + 视觉；
         Key 取环境变量或 GUI 保存的 DPAPI 密文，见 `deepseek_key_info()`）。
         云端只在**显式选择**时启用，`auto` 不会静默把内容发到网上。
 
@@ -231,8 +231,9 @@ def _no_backend_hint() -> str:
         "  ② 用你已有的 Ollama —— 确认它已启动：\n"
         "         ollama serve\n"
         f"     并已拉取视觉模型（当前配置：{VlmConfig().model}）\n"
-        "  ③ 有文本层、只想省资源 —— 用 DeepSeek 云端文本模型（需环境变量\n"
-        "         DEEPSEEK_API_KEY，且把 [vlm] backend 设为 deepseek）"
+        "  ③ 用 DeepSeek 云端（deepseek-flash：文本 + 视觉，不占内存）——\n"
+        "         在「AI 模型」面板填 Key，或设 DEEPSEEK_API_KEY，\n"
+        "         再把 [vlm] backend 设为 deepseek"
     )
 
 
@@ -317,8 +318,8 @@ def extract_metadata(vlm: VlmConfig, image: bytes) -> dict:
 def extract_metadata_from_text(vlm: VlmConfig, text: str) -> dict:
     """PDF 文本层片段 → 结构化元数据（PRD §12，文本流程）。
 
-    走 `chat_text()`：DeepSeek 等纯文本后端可用，多模态后端（llama.cpp / Ollama）
-    同样支持 —— 差别只是**不发图**，因此更快、更省。
+    走 `chat_text()`：DeepSeek 与本地多模态模型（llama.cpp / Ollama）都支持 ——
+    差别只是**不发图**，因此更快、更省。
 
     文本为空、模型不可用、或适配器没有实现 `chat_text()` 时给出明确错误（§13）。
     """

@@ -954,12 +954,15 @@ async function openAiPanel() {
     : '';
   const dsCard = `<div class="model-row ${usingDs ? 'active' : ''}">
     <div class="model-head">
-      <b>DeepSeek API（云端 · 纯文本）</b>
+      <b>DeepSeek API（云端 · 文本 + 视觉）</b>
       <span class="badge ${dsReady ? 'ok' : 'warn'}">${dsReady ? `已配置 · ${dsSource}` : '未配置 Key'}</span>
       ${usingDs ? '<span class="badge ok">当前选用</span>' : ''}
     </div>
     <div class="model-note">${esc(ds.endpoint || '')}　模型 ${esc(ds.model || '')}${dsLine}${dsStale}</div>
-    <div class="model-note">只发送 PDF <b>文字</b>，不上传图片；扫描件（无文本层）请用本地视觉模型。</div>
+    <div class="model-note">有文本层时<b>只发文字</b>；扫描件在「读图」开启时会把页面渲染成图上传。
+      读图：<b>${ds.vision === false ? '关闭' : '开启'}</b>${ds.vision === false
+        ? '（book.toml 里 <code>deepseek_vision = true</code> 可打开）'
+        : '（<code>deepseek_vision = false</code> 可关闭）'}</div>
     <div class="model-actions">
       <button class="ghost" data-act="ds-key" ${canStoreKey ? '' : 'disabled title="仅 Windows 支持加密保存，请用环境变量"'}>
         设置 Key…</button>
@@ -967,7 +970,7 @@ async function openAiPanel() {
       <button class="ghost" data-act="ds-test">测试连接</button>
       ${usingDs
         ? `<button class="ghost" data-act="ds-off" ${canSwitch ? '' : 'disabled'}>改回本地模型</button>`
-        : `<button class="primary" data-act="ds-use" ${dsReady && canSwitch ? '' : 'disabled'}>用于文本提取</button>`}
+        : `<button class="primary" data-act="ds-use" ${dsReady && canSwitch ? '' : 'disabled'}>用于提取</button>`}
     </div>
   </div>`;
 

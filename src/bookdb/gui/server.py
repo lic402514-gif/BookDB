@@ -667,6 +667,7 @@ def _h_model_status(config, match, query, body) -> dict:
             "storage": "dpapi" if secret_store.available() else "unsupported",
             "endpoint": vlm.deepseek_endpoint,
             "model": vlm.deepseek_model,
+            "vision": bool(getattr(vlm, "deepseek_vision", True)),
             "env": ENV_API_KEY,
         },
         "active": None,

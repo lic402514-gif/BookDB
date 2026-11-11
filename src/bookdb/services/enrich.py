@@ -6,13 +6,14 @@
 由 CLI / GUI 显示差异、经用户确认后才写入。
 
 两条取料路线：
-  1. **图像**（默认；本地视觉模型）——
-     文本层关键词先定位；命中不了（扫描件）就逐页渲染喂 VLM。
+  1. **图像**（本地视觉模型；或 DeepSeek Vision）——
+     文本层关键词先定位；命中不了（扫描件）就逐页渲染喂模型。
      按页号从小到大试，遇到含 **ISBN** 的结果即停，并与前面页的结果**合并**
      （封面常有书名/作者、版权页才有 ISBN/年份，合并后最完整）。
   2. **文字**（`backend = "deepseek"` 或显式 `mode="text"`）——
-     直接读 PDF 文本层前几页交给**文本模型**；不渲染、不发图，更快更省。
-     扫描件没有文本层 → `NoTextLayer`，明确提示改用本地视觉模型（不静默降级）。
+     直接读 PDF 文本层前几页交给模型；不渲染、不发图，更快更省。
+     扫描件没有文本层 → `NoTextLayer`；若 `deepseek_vision = true`（默认），
+     `backend = "deepseek"` 会自动回退到 DeepSeek Vision 读渲染页，而不是直接失败。
 
 实测（用户真实扫描件 + qwen2.5vl:3b）：6~15 秒/本，字段基本准确。
 """
@@ -24,7 +25,6 @@ from pathlib import Path
 
 from .. import pdf as pdf_mod
 from ..config import Config
-from ..llm.base import ModelUnavailableError
 from .llm import extract_metadata, extract_metadata_from_text, merge_metadata
 
 #: 自动扫描时最多渲染的前 N 页。
@@ -98,8 +98,9 @@ def enrich_from_pdf_text(
     if not pages:
         raise NoTextLayer(
             f"该 PDF 前 {max_pages} 页没有文本层（多为扫描件 / 图片版）。\n"
-            "文字流程无法处理，请改用本地视觉模型：\n"
-            "  · 把 book.toml 的 [vlm] backend 改为 auto / builtin；\n"
+            "文字流程无法处理。可选：\n"
+            "  · DeepSeek：[vlm] deepseek_vision = true（用 Vision 读渲染页，会上传图片）；\n"
+            "  · 本地视觉模型：把 [vlm] backend 改为 auto / builtin；\n"
             "  · 或在「AI 模型」面板切回本地模型。"
         )
 
@@ -175,8 +176,11 @@ def enrich_from_pdf(
     """从 PDF 提取元数据。
 
     `mode` 决定取料方式：
-      · `None`（默认）—— 按配置自动：`backend = "deepseek"` 走 **文字**，其余走**图像**；
-      · `"text"`  —— 强制文字流程（本地多模态模型也支持，只是不发图）；
+      · `None`（默认）—— 按配置自动：
+          - `backend = "deepseek"`：**有文本层先走文字**（便宜），
+            扫描件且 `deepseek_vision = true` 时回退到 DeepSeek Vision（渲染成图）；
+          - 其他后端：走视觉流程。
+      · `"text"`  —— 强制文字流程（本地多模态模型也支持，只是不发图），**不回退**；
       · `"image"` —— 强制渲染喂视觉模型（扫描件的正解）。
 
     page 指定时只处理该页；否则自动定位（文本层关键词优先）。
@@ -184,18 +188,21 @@ def enrich_from_pdf(
     if mode not in (None, "text", "image"):
         raise ValueError(f"未知的取料方式：{mode!r}（只能是 text / image）")
 
-    if mode == "image" and getattr(config.vlm, "backend", "auto") == "deepseek":
-        raise ModelUnavailableError(
-            "当前后端是 DeepSeek（只有文本模型，不能读图）。\n"
-            "请改用本地视觉模型（[vlm] backend = auto / builtin），"
-            "或去掉强制视觉、对有文本层的 PDF 走文字流程。"
-        )
-
-    use_text = mode == "text" or (
-        mode is None and getattr(config.vlm, "backend", "auto") == "deepseek"
-    )
+    backend = getattr(config.vlm, "backend", "auto")
+    use_text = mode == "text" or (mode is None and backend == "deepseek")
     if use_text:
-        return enrich_from_pdf_text(config, path, page, max_pages=max_pages)
+        try:
+            return enrich_from_pdf_text(config, path, page, max_pages=max_pages)
+        except NoTextLayer:
+            can_fallback = (
+                mode is None
+                and backend == "deepseek"
+                and getattr(config.vlm, "deepseek_vision", False)
+            )
+            if not can_fallback:
+                raise
+            # 扫描件：文字流程没料可用 → 交给同一个云后端的视觉模型
+            # （对应 book.toml 的 [vlm] deepseek_vision = true，默认开）
 
     if page is not None:
         image = pdf_mod.render_page_png(path, page)

@@ -113,7 +113,7 @@ def status() -> None:
     where = {
         "LlamaServerAdapter": "内置 llama.cpp（本地视觉）",
         "OllamaAdapter": "Ollama（本地视觉）",
-        "DeepSeekAdapter": "DeepSeek 云端（纯文本，只处理文字）",
+        "DeepSeekAdapter": "DeepSeek 云端（deepseek-flash：文本 + 视觉）",
     }.get(type(adapter).__name__, type(adapter).__name__)
     console.print(f"\n[green]✓ 当前将使用：{where}[/green]")
 
@@ -149,7 +149,10 @@ def backend(
         key, source = llm_service.deepseek_key_info()
         if key:
             where = "环境变量" if source == "env" else "GUI 加密保存"
-            console.print(f"[dim]Key 来源：{where}；只处理 PDF 文本层，不读图。[/dim]")
+            console.print(
+                f"[dim]Key 来源：{where}；有文本层只发文字，扫描件由 "
+                f"[vlm] deepseek_vision 决定是否上传渲染图。[/dim]"
+            )
         else:
             console.print(
                 "[yellow]⚠ 还没配置 DeepSeek Key，切过去也无法提取。[/yellow]\n"

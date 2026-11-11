@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 import sys
@@ -105,6 +106,24 @@ class _FakeTextAdapter:
 
     def describe_image(self, image: bytes, prompt: str) -> str:  # pragma: no cover
         raise AssertionError("文本流程不应调用 describe_image")
+
+
+class _FakeVisionAdapter:
+    """同时实现 chat_text / describe_image；记录收到的图片（验证真的喂了图）。"""
+
+    def __init__(self, reply: str):
+        self.reply = reply
+        self.prompts: list[str] = []
+        self.images: list[bytes] = []
+
+    def chat_text(self, prompt: str, *, max_tokens: int | None = None) -> str:
+        self.prompts.append(prompt)
+        return self.reply
+
+    def describe_image(self, image: bytes, prompt: str) -> str:
+        self.images.append(image)
+        self.prompts.append(prompt)
+        return self.reply
 
 
 def _pymupdf():
@@ -226,10 +245,37 @@ def test_network_error_mentions_endpoint(monkeypatch):
         DeepSeekAdapter().chat_text("x")
 
 
-def test_describe_image_refuses_instead_of_pretending(monkeypatch):
+def test_describe_image_sends_data_url(monkeypatch):
+    """DeepSeek Vision：图片走 OpenAI 兼容的 `image_url` data URL 块。"""
     monkeypatch.setenv(ENV_API_KEY, "sk-test")
-    with pytest.raises(ModelUnavailableError, match="不能读图"):
-        DeepSeekAdapter().describe_image(b"\x89PNG", "提取元数据")
+    calls = _patch_urlopen(monkeypatch, result=_ok('{"title":"书"}'))
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+
+    out = DeepSeekAdapter().describe_image(png, "提取版权页")
+
+    assert out == '{"title":"书"}'
+    payload = json.loads(calls[0].data.decode("utf-8"))
+    assert payload["model"] == DEFAULT_MODEL
+    content = payload["messages"][0]["content"]
+    assert content[0] == {"type": "text", "text": "提取版权页"}
+    url = content[1]["image_url"]["url"]
+    assert url.startswith("data:image/png;base64,")
+    assert base64.b64decode(url.split(",", 1)[1]) == png
+    assert "images" not in payload            # 不是 Ollama 那套字段
+
+
+def test_describe_image_rejects_text_only_model(monkeypatch):
+    """`deepseek-v4-pro` 不支持 Vision —— 本地先拒绝，不让云端回 400。"""
+    monkeypatch.setenv(ENV_API_KEY, "sk-test")
+    with pytest.raises(ModelUnavailableError, match="不支持图片输入"):
+        DeepSeekAdapter(model="deepseek-v4-pro").describe_image(b"\x89PNG", "x")
+
+
+def test_legacy_model_names_map_to_flash(monkeypatch):
+    """已下线的旧模型名自动映射到现役 Flash（官方：旧名请求由 Flash 承接）。"""
+    monkeypatch.setenv(ENV_API_KEY, "sk-test")
+    for old in ("deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash-vision-exp"):
+        assert DeepSeekAdapter(model=old).model == DEFAULT_MODEL
 
 
 def test_get_adapter_deepseek(monkeypatch):
@@ -254,19 +300,22 @@ def test_deepseek_config_roundtrip(tmp_path: Path):
     path = tmp_path / "book.toml"
     cfg = Config(config_path=path, db_path=tmp_path / "book.db")
     cfg.vlm.backend = "deepseek"
-    cfg.vlm.deepseek_model = "deepseek-reasoner"
+    cfg.vlm.deepseek_model = "deepseek-v4-pro"
     cfg.vlm.deepseek_endpoint = "https://proxy.example/v1"
+    cfg.vlm.deepseek_vision = False
     cfg.save()
 
     text = path.read_text(encoding="utf-8")
     assert 'backend = "deepseek"' in text
-    assert 'deepseek_model = "deepseek-reasoner"' in text
+    assert 'deepseek_model = "deepseek-v4-pro"' in text
     assert "deepseek_endpoint" in text
+    assert "deepseek_vision = false" in text
 
     loaded = Config.load(path)
     assert loaded.vlm.backend == "deepseek"
-    assert loaded.vlm.deepseek_model == "deepseek-reasoner"
+    assert loaded.vlm.deepseek_model == "deepseek-v4-pro"
     assert loaded.vlm.deepseek_endpoint == "https://proxy.example/v1"
+    assert loaded.vlm.deepseek_vision is False
 
 
 def test_old_book_toml_without_deepseek_keys_keeps_defaults(tmp_path: Path):
@@ -339,21 +388,55 @@ def test_text_enrich_never_renders_pages(tmp_path: Path, monkeypatch):
     assert enrich_service.enrich_from_pdf(_config(tmp_path), path).metadata["title"]
 
 
-def test_scanned_pdf_gives_actionable_error(tmp_path: Path, monkeypatch):
+def test_scanned_pdf_gives_actionable_error_when_vision_off(tmp_path: Path, monkeypatch):
+    """`deepseek_vision = false`：扫描件明确报错，不偷偷上传图片。"""
     path = tmp_path / "scan.pdf"
     _blank_pdf(path, 3)
     monkeypatch.setattr(llm_service, "get_adapter", lambda vlm: _FakeTextAdapter("{}"))
 
+    cfg = _config(tmp_path)
+    cfg.vlm.deepseek_vision = False
     with pytest.raises(enrich_service.NoTextLayer, match="没有文本层"):
-        enrich_service.enrich_from_pdf(_config(tmp_path), path)
+        enrich_service.enrich_from_pdf(cfg, path)
 
 
-def test_forced_image_mode_with_deepseek_is_rejected(tmp_path: Path):
+def test_scanned_pdf_falls_back_to_deepseek_vision(tmp_path: Path, monkeypatch):
+    """扫描件（无文本层）→ 渲染成图交给 DeepSeek Vision（默认开启）。"""
+    path = tmp_path / "scan.pdf"
+    _blank_pdf(path, 3)
+    fake = _FakeVisionAdapter(_COPYRIGHT_JSON)
+    monkeypatch.setattr(llm_service, "get_adapter", lambda vlm: fake)
+
+    result = enrich_service.enrich_from_pdf(_config(tmp_path), path)
+
+    assert result.source == "pdf"
+    assert result.metadata["title"] == "否定辩证法"
+    assert fake.images                          # 确实渲染并把图喂给了模型
+    assert fake.images[0][:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_explicit_text_mode_never_falls_back(tmp_path: Path, monkeypatch):
+    """显式 `--text` 时即使开了读图也不回退 —— 用户意图优先。"""
+    path = tmp_path / "scan.pdf"
+    _blank_pdf(path, 2)
+    monkeypatch.setattr(llm_service, "get_adapter", lambda vlm: _FakeTextAdapter("{}"))
+
+    with pytest.raises(enrich_service.NoTextLayer, match="没有文本层"):
+        enrich_service.enrich_from_pdf(_config(tmp_path), path, mode="text")
+
+
+def test_forced_image_mode_with_deepseek_uses_vision(tmp_path: Path, monkeypatch):
+    """`--vision` + deepseek-flash：渲染页面走 DeepSeek Vision（不再被拒绝）。"""
     path = tmp_path / "book.pdf"
     _make_pdf(path, ["ISBN 9787100163180"])
+    fake = _FakeVisionAdapter(_COPYRIGHT_JSON)
+    monkeypatch.setattr(llm_service, "get_adapter", lambda vlm: fake)
 
-    with pytest.raises(ModelUnavailableError, match="不能读图"):
-        enrich_service.enrich_from_pdf(_config(tmp_path), path, mode="image")
+    result = enrich_service.enrich_from_pdf(_config(tmp_path), path, mode="image")
+
+    assert result.source == "pdf"
+    assert result.metadata["title"] == "否定辩证法"
+    assert fake.images
 
 
 def test_forced_text_mode_works_with_local_backend(tmp_path: Path, monkeypatch):
