@@ -762,7 +762,7 @@ def _h_deepseek_test(config, match, query, body) -> dict:
             model=vlm.deepseek_model,
             api_key=llm_svc.resolve_deepseek_key(),
         )
-        reply = adapter.chat_text("请只回复两个字：可用", max_tokens=8)
+        reply = adapter.chat_text("请只回复两个字：可用", max_tokens=32)
     except ModelUnavailableError as exc:
         raise ApiError(str(exc), 400) from exc
     return {"ok": True, "model": vlm.deepseek_model, "reply": reply.strip()[:50]}

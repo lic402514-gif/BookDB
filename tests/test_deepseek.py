@@ -208,6 +208,8 @@ def test_chat_text_sends_bearer_and_no_images(monkeypatch):
     assert "images" not in payload          # 纯文本：绝不带图
     assert payload["stream"] is False
     assert payload["temperature"] == 0
+    # 思考模式默认关：否则思维链会先吃掉 max_tokens，content 可能为空
+    assert payload["thinking"] == {"type": "disabled"}
 
 
 def test_endpoint_with_v1_suffix_still_works(monkeypatch):
@@ -262,6 +264,7 @@ def test_describe_image_sends_data_url(monkeypatch):
     assert url.startswith("data:image/png;base64,")
     assert base64.b64decode(url.split(",", 1)[1]) == png
     assert "images" not in payload            # 不是 Ollama 那套字段
+    assert payload["thinking"] == {"type": "disabled"}
 
 
 def test_describe_image_rejects_text_only_model(monkeypatch):

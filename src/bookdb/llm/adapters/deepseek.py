@@ -91,6 +91,7 @@ class DeepSeekAdapter(VLMAdapter):
         api_key: str | None = None,
         timeout: float = 120.0,
         max_tokens: int = 1024,
+        thinking: bool = False,
     ):
         requested = (model or DEFAULT_MODEL).strip()
         super().__init__(endpoint=endpoint, model=_normalize_model(requested))
@@ -109,12 +110,19 @@ class DeepSeekAdapter(VLMAdapter):
         self._api_key = key
         self.timeout = timeout
         self.max_tokens = max_tokens
+        # DeepSeek 的**思考模式默认开启**，思维链会先消耗 max_tokens，
+        # 抽取元数据这种确定性任务用不上它（还会让 content 变空、更慢更贵）。
+        # 因此默认关闭；需要推理时构造时传 thinking=True。
+        self.thinking = thinking
 
     # ---------------------------------------------------------------- 能力
     @property
     def supports_vision(self) -> bool:
         """当前模型是否支持图片输入（只有 Flash 系支持）。"""
         return self.model.lower() in VISION_MODELS
+
+    def _thinking_payload(self) -> dict:
+        return {"type": "enabled" if self.thinking else "disabled"}
 
     # ---------------------------------------------------------------- 接口
     def chat_text(self, prompt: str, *, max_tokens: int | None = None) -> str:
@@ -125,6 +133,7 @@ class DeepSeekAdapter(VLMAdapter):
             "stream": False,
             "temperature": 0,
             "max_tokens": max_tokens or self.max_tokens,
+            "thinking": self._thinking_payload(),
         }
         return self._content(self._post(self._url(), payload))
 
@@ -155,6 +164,7 @@ class DeepSeekAdapter(VLMAdapter):
             "stream": False,
             "temperature": 0,
             "max_tokens": self.max_tokens,
+            "thinking": self._thinking_payload(),
         }
         return self._content(self._post(self._url(), payload))
 
