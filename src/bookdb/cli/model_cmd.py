@@ -81,9 +81,8 @@ def list_models() -> None:
 
 @app.command()
 def status() -> None:
-    """显示当前会实际使用哪个后端（内置 / Ollama / 都不可用）。"""
+    """显示当前会实际使用哪个后端（内置 / Ollama / DeepSeek / 都不可用）。"""
     from ..config import Config
-    from .. import paths
     from ..llm.adapters import llamacpp
     from ..services import llm as llm_service
     from ..llm.base import ModelUnavailableError
@@ -97,15 +96,67 @@ def status() -> None:
     console.print(f"Ollama 端点：{vlm.endpoint}　"
                   f"{'[green]可连通[/green]' if llm_service._ollama_reachable(vlm.endpoint) else '[dim]未运行[/dim]'}")
 
+    key, source = llm_service.deepseek_key_info()
+    key_state = {
+        "env": "[green]已设置（环境变量，优先）[/green]",
+        "file": "[green]已设置（GUI 加密保存）[/green]",
+    }.get(source, "[dim]未配置[/dim]")
+    console.print(f"DeepSeek API：{key_state}　模型 [bold]{vlm.deepseek_model}[/bold]　"
+                  f"端点 {vlm.deepseek_endpoint}")
+
     try:
         adapter = llm_service.get_adapter(vlm)
     except ModelUnavailableError as exc:
         console.print(f"\n[yellow]当前状态：不可用[/yellow]\n{exc}")
         raise typer.Exit(code=1) from exc
 
-    name = adapter.__class__.__name__
-    where = "内置 llama.cpp" if "Llama" in name else "Ollama"
+    where = {
+        "LlamaServerAdapter": "内置 llama.cpp（本地视觉）",
+        "OllamaAdapter": "Ollama（本地视觉）",
+        "DeepSeekAdapter": "DeepSeek 云端（纯文本，只处理文字）",
+    }.get(type(adapter).__name__, type(adapter).__name__)
     console.print(f"\n[green]✓ 当前将使用：{where}[/green]")
+
+
+@app.command()
+def backend(
+    name: str = typer.Argument(..., help="auto / builtin / ollama / deepseek"),
+) -> None:
+    """切换元数据提取后端（写回 book.toml 的 [vlm].backend）。"""
+    from ..config import Config
+    from ..llm.adapters.deepseek import ENV_API_KEY
+    from ..services import llm as llm_service
+
+    value = name.strip().lower()
+    allowed = ("auto", "builtin", "ollama", "deepseek")
+    if value not in allowed:
+        err_console.print(f"[red]未知后端：{name}[/red]　可选：{' / '.join(allowed)}")
+        raise typer.Exit(code=1)
+
+    cfg = Config.load()
+    if cfg.config_path is None:
+        err_console.print(
+            "[red]当前目录没有 book.toml。[/red]\n"
+            "[dim]请先 `book init`，或切换到书库目录后再执行。[/dim]"
+        )
+        raise typer.Exit(code=1)
+
+    cfg.vlm.backend = value
+    path = cfg.save()
+
+    console.print(f"[green]✓[/green] 后端已切换为 [bold]{value}[/bold]（{path}）")
+    if value == "deepseek":
+        key, source = llm_service.deepseek_key_info()
+        if key:
+            where = "环境变量" if source == "env" else "GUI 加密保存"
+            console.print(f"[dim]Key 来源：{where}；只处理 PDF 文本层，不读图。[/dim]")
+        else:
+            console.print(
+                "[yellow]⚠ 还没配置 DeepSeek Key，切过去也无法提取。[/yellow]\n"
+                "[dim]可在 GUI「AI 模型」面板点「设置 Key…」，"
+                f'或设环境变量 {ENV_API_KEY}：[/dim]\n'
+                '[dim]PowerShell：$env:DEEPSEEK_API_KEY = "sk-..."[/dim]'
+            )
 
 
 @app.command()

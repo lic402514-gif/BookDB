@@ -357,19 +357,19 @@ def test_llamacpp_close_is_idempotent(tmp_path, monkeypatch):
 # ═══════════════════════════════════════════════════════ 适配器选择
 def test_get_adapter_prefers_builtin(monkeypatch):
     sentinel = object()
-    monkeypatch.setattr(llm_service, "_builtin_adapter", lambda vlm: sentinel)
+    monkeypatch.setattr(llm_service, "_builtin_adapter", lambda vlm, **kw: sentinel)
     assert llm_service.get_adapter(VlmConfig()) is sentinel
 
 
 def test_get_adapter_falls_back_to_ollama(monkeypatch):
-    monkeypatch.setattr(llm_service, "_builtin_adapter", lambda vlm: None)
+    monkeypatch.setattr(llm_service, "_builtin_adapter", lambda vlm, **kw: None)
     monkeypatch.setattr(llm_service, "_ollama_reachable", lambda ep: True)
     adapter = llm_service.get_adapter(VlmConfig())
     assert adapter.__class__.__name__ == "OllamaAdapter"
 
 
 def test_get_adapter_errors_when_no_backend(monkeypatch):
-    monkeypatch.setattr(llm_service, "_builtin_adapter", lambda vlm: None)
+    monkeypatch.setattr(llm_service, "_builtin_adapter", lambda vlm, **kw: None)
     monkeypatch.setattr(llm_service, "_ollama_reachable", lambda ep: False)
     with pytest.raises(ModelUnavailableError) as e:
         llm_service.get_adapter(VlmConfig())
@@ -378,14 +378,14 @@ def test_get_adapter_errors_when_no_backend(monkeypatch):
 
 
 def test_get_adapter_builtin_forces_builtin(monkeypatch):
-    monkeypatch.setattr(llm_service, "_builtin_adapter", lambda vlm: None)
+    monkeypatch.setattr(llm_service, "_builtin_adapter", lambda vlm, **kw: None)
     monkeypatch.setattr(llm_service, "_ollama_reachable", lambda ep: True)
     with pytest.raises(ModelUnavailableError, match="内置视觉模型"):
         llm_service.get_adapter(VlmConfig(backend="builtin"))
 
 
 def test_get_adapter_ollama_forces_ollama(monkeypatch):
-    monkeypatch.setattr(llm_service, "_builtin_adapter", lambda vlm: object())
+    monkeypatch.setattr(llm_service, "_builtin_adapter", lambda vlm, **kw: object())
     monkeypatch.setattr(llm_service, "_ollama_reachable", lambda ep: True)
     adapter = llm_service.get_adapter(VlmConfig(backend="ollama"))
     assert adapter.__class__.__name__ == "OllamaAdapter"
@@ -474,7 +474,7 @@ def test_acquire_rebuilds_when_process_died(monkeypatch, tmp_path):
 
 # ═══════════════════════════════════════════ 模型目录可配置（C 盘教训）
 def test_models_dir_default_is_not_roaming_appdata(monkeypatch, tmp_path):
-    """⚠️ 回归：默认模型目录**不得**在 %APPDATA%（漫游）里。
+    r"""⚠️ 回归：默认模型目录**不得**在 %APPDATA%（漫游）里。
 
     模型是 GB 级文件，放 %APPDATA% 下的 BookDB\models 会迅速吃满 C 盘
     （实测教训：7B 占 5.2GB，C 盘只剩 13GB）。默认应为 `%LOCALAPPDATA%`。

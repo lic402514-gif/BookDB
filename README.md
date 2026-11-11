@@ -78,6 +78,7 @@ BookDB 把「程序」和「你的书库」**彻底分开**：
 - **文件重命名**：按元数据生成规范化文件名，`--dry-run` 预览 / `--apply` 执行，同步更新库内路径
 - **引用输出**：GB/T 7714-2015 专著（`book cite`）；版本项按国标 —— 第 1 版不著录，其余写作 `2版`
 - **版权页提取**：本地 VLM 从版权页图像提取元数据，人工确认后写入；**支持扫描件**（无文本层时逐页渲染喂 VLM）。**内置 llama.cpp 推理引擎**，也兼容已有 Ollama
+- **云端文本提取（可选）**：PDF **有文本层**时可改用 DeepSeek API —— 只发送文字、不上传图片，比本地 3B 模型更快；Key 可在界面里填（DPAPI 加密存本机）或走环境变量，默认不启用
 - **桌面 GUI**：pywebview + 原生 HTML/CSS/JS，内部仅 127.0.0.1 的 HTTP 端点，不对外暴露
 - **独立桌面入口**：`BookDB` 自带 GUI 入口，不经 CLI；程序、应用设置、用户数据三者分离
 - **Library 管理**：GUI 自己维护「当前书库」——首次启动显示欢迎页（新建 / 打开 / 最近使用），自动打开上次书库，支持运行中切换
@@ -95,7 +96,7 @@ git clone https://github.com/lic402514-gif/BookDB.git
 cd BookDB
 uv venv
 uv pip install -e ".[gui,pdf,dev]"    # 只要 CLI 可省去 gui/pdf
-uv run pytest -q                       # 185 passed
+uv run pytest -q                       # 286 passed
 ```
 
 ### 打包（生成 Release 产物）
@@ -281,6 +282,63 @@ book model remove 3b     # 删除本程序下载的（不动 Ollama 里的）
 模型名 / 端点写在 `book.toml` 的 `[vlm]`，不硬编码；换成其他推理框架只需新增一个适配器。
 **模型不可用时 `book enrich` 会明确提示并退出，其余功能不受影响。**
 
+## 云端 DeepSeek（可选，只处理文字）
+
+DeepSeek 的 API **只有文本模型**（`deepseek-chat` / `deepseek-reasoner`），**不能读图**。
+BookDB 把它接成「**PDF 文本层 → 元数据**」的后端：不渲染页面、不发图片，
+有文本层的电子书比本地 3B 模型更快，也不占内存 / 显存。
+
+```bash
+# 1) 配置 Key（两种方式，环境变量优先）
+#    a. GUI：「🧠 AI 模型」→ DeepSeek 卡片 →「设置 Key…」
+#       用 Windows DPAPI 加密后存本机，明文不落盘
+#    b. 环境变量：在启动 BookDB 的同一个终端里
+$env:DEEPSEEK_API_KEY = "sk-..."        # PowerShell
+set DEEPSEEK_API_KEY=sk-...             # cmd
+
+# 2) 切换后端（写回 book.toml 的 [vlm] backend）
+book model backend deepseek
+book model status                 # 看当前实际会用哪个后端 + Key 来源
+
+# 3) 提取（自动走文字流程）
+book enrich --pdf "D:/Books/否定辩证法.pdf"
+```
+
+只想对单本强制文字流程、不动全局配置：
+
+```bash
+book enrich --pdf book.pdf --text      # 强制文字（DeepSeek 或本地多模态模型都行）
+book enrich --pdf scan.pdf --vision    # 强制渲染成图（扫描件的正解）
+```
+
+GUI：「🧠 AI 模型」面板 → **DeepSeek API（云端 · 纯文本）** 卡片，可
+**设置 Key…** / 清除 / 测试连接 / 用于文本提取。卡片上显示 Key 来源与掩码
+（`sk-ab…cd12`），**完整 Key 不会回传到页面**。
+
+配置（`book.toml`）：
+
+```toml
+[vlm]
+backend = "deepseek"
+deepseek_endpoint = "https://api.deepseek.com"   # 也可指向兼容代理
+deepseek_model = "deepseek-chat"
+```
+
+约定（都按「本地优先」+ 最小暴露设计）：
+
+- **`auto` 永远不会上云** —— 只有显式把 `backend` 设为 `deepseek` 才会发请求；
+- **只发文字**：PDF 文本层前 8 页、最多 12000 字；**不发送图片**；
+- **扫描件（无文本层）明确报错**并提示改用本地视觉模型，不静默回退、不偷偷渲染上传；
+- **Key 明文不落盘**：
+  - GUI 填写的 Key 用 **Windows DPAPI** 加密后才写入
+    `%APPDATA%\BookDB\settings.json`，只有**当前 Windows 用户**能解密；换账户或拷走文件都解不开；
+  - 环境变量 `DEEPSEEK_API_KEY` **优先**于 GUI 保存的值（方便临时覆盖/脚本化）；
+  - Key **绝不**写进 `book.toml`（书库目录常被整体复制/分享）。
+- 局限照实说：DPAPI 防的是「文件被拷走 / 别的账户读取」，
+  防不住**以当前用户身份运行的恶意程序**；
+- 「测试连接」会真的调用一次云端（消耗几个 token）。
+- 不配 DeepSeek 时，其余全部功能（含本地视觉提取）照旧。
+
 ## 检索年份语法（§8.2）
 
 | 写法 | 含义 |
@@ -299,6 +357,7 @@ book model remove 3b     # 删除本程序下载的（不动 Ollama 里的）
 | M4 | 本地 VLM 版权页提取（Ollama 适配） | ✅ |
 | M5 | pywebview GUI（内部 HTTP 端点） | ✅ |
 | 扩展 | 扫描目录批量建库（`book scan`，按文件名解析） | ✅ |
+| 扩展 | 云端文本后端（DeepSeek，可选；只发文字、Key 可界面填写并加密存储） | ✅ |
 
 完整需求见 [`docs/PRD.md`](docs/PRD.md)。
 

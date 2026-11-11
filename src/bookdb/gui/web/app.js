@@ -542,7 +542,7 @@ async function pickPath(kind) {
 async function doEnrich() {
   const path = await pickPath('pdf');
   if (!path) return;
-  toast('正在调用本地模型提取，请稍候…');
+  toast('正在提取元数据，请稍候…');
   let result;
   try {
     result = await api('/api/enrich', { method: 'POST', body: { path } });
@@ -551,7 +551,9 @@ async function doEnrich() {
   const m = result.metadata;
   const row = (label, name, value) =>
     `<label>${label}<input name="${name}" value="${esc(value ?? '')}"></label>`;
-  openModal(`版权页提取结果 · ${result.page ? `第 ${result.page} 页` : result.source}`,
+  const srcLabel = result.source === 'pdf-text' ? 'PDF 文字'
+    : result.source === 'pdf' ? 'PDF 图像' : result.source;
+  openModal(`版权页提取结果 · ${result.page ? `第 ${result.page} 页` : srcLabel}`,
     `<p class="muted small">模型输出，请核对后再写入。空字段表示未识别。</p>
      <div class="grid">
        ${row('书名', 'title', m.title)}
@@ -927,11 +929,47 @@ async function openAiPanel() {
   const activeText = !status ? '状态未知'
     : status.active === 'builtin' ? '内置 llama.cpp'
     : status.active === 'ollama' ? 'Ollama'
+    : status.active === 'deepseek' ? 'DeepSeek API（云端文本）'
     : '不可用';
   const cls = status && status.active ? '' : ' bad';
   const hint = status && status.hint
     ? `<div class="muted" style="margin-top:6px;white-space:pre-wrap;font-size:12px">${esc(status.hint)}</div>`
     : '';
+
+  // 云端文本后端（DeepSeek）：Key 来自环境变量或 GUI 保存（DPAPI 密文），
+  // 前端只拿到掩码，绝不接触完整 Key。
+  const ds = (status && status.deepseek) || {};
+  const dsReady = !!ds.configured;
+  const usingDs = status && status.backend === 'deepseek';
+  const canSwitch = !(status && status.no_library);
+  const canStoreKey = ds.storage !== 'unsupported';
+  const dsSource = ds.source === 'env' ? '环境变量'
+    : ds.source === 'file' ? '本机加密保存' : '';
+  const dsLine = dsReady
+    ? `<br>当前 Key：<code>${esc(ds.masked)}</code>（${dsSource}${ds.source === 'env' ? '，优先于界面保存的值' : ''}）`
+    : `<br>未配置。可点「设置 Key…」填写（DPAPI 加密后存本机），
+       或设环境变量 <code>${esc(ds.env || 'DEEPSEEK_API_KEY')}</code>`;
+  const dsStale = ds.stored && !dsReady
+    ? '<br>⚠ 已保存的 Key 无法解密（可能换了 Windows 账户），请重新填写或清除'
+    : '';
+  const dsCard = `<div class="model-row ${usingDs ? 'active' : ''}">
+    <div class="model-head">
+      <b>DeepSeek API（云端 · 纯文本）</b>
+      <span class="badge ${dsReady ? 'ok' : 'warn'}">${dsReady ? `已配置 · ${dsSource}` : '未配置 Key'}</span>
+      ${usingDs ? '<span class="badge ok">当前选用</span>' : ''}
+    </div>
+    <div class="model-note">${esc(ds.endpoint || '')}　模型 ${esc(ds.model || '')}${dsLine}${dsStale}</div>
+    <div class="model-note">只发送 PDF <b>文字</b>，不上传图片；扫描件（无文本层）请用本地视觉模型。</div>
+    <div class="model-actions">
+      <button class="ghost" data-act="ds-key" ${canStoreKey ? '' : 'disabled title="仅 Windows 支持加密保存，请用环境变量"'}>
+        设置 Key…</button>
+      ${ds.stored ? '<button class="ghost" data-act="ds-clear">清除已保存</button>' : ''}
+      <button class="ghost" data-act="ds-test">测试连接</button>
+      ${usingDs
+        ? `<button class="ghost" data-act="ds-off" ${canSwitch ? '' : 'disabled'}>改回本地模型</button>`
+        : `<button class="primary" data-act="ds-use" ${dsReady && canSwitch ? '' : 'disabled'}>用于文本提取</button>`}
+    </div>
+  </div>`;
 
   const rows = data.items.map((m) => {
     const [label, cls2] = SRC_LABEL[m.source] || ['—', ''];
@@ -958,13 +996,14 @@ async function openAiPanel() {
     `<div class="ai-status bad">未找到内置推理组件（llama-server）。
       安装版应自带；源码运行请先执行 <code>bash packaging/fetch_llama.sh</code>。</div>`;
 
-  openModal('本地 AI 模型',
+  openModal('AI 模型',
     `<div class="ai-status${cls}">当前将使用：<b>${activeText}</b>${hint}</div>
      ${noBin}
      <p class="muted small">AI 功能（版权页提取 / 批量补全）需要本地视觉模型。
        若你已装过 Ollama 并拉取过同款模型，这里会显示「复用 Ollama」——
-       <b>无需重复下载</b>。</p>
+       <b>无需重复下载</b>。有文本层的 PDF 也可以改用下面的 DeepSeek（更省资源）。</p>
      ${rows}
+     ${dsCard}
      <div id="dl-box" class="hidden">
        <div class="dl-track"><div id="dl-fill" class="dl-fill"></div></div>
        <div class="dl-meta" id="dl-meta"></div>
@@ -1005,7 +1044,69 @@ async function openAiPanel() {
     if (act === 'download') return startDownload(key);
     if (act === 'select')   return selectModel(key);
     if (act === 'remove')   return removeModel(key);
+    if (act === 'ds-test')  return testDeepseek();
+    if (act === 'ds-use')   return switchBackend('deepseek');
+    if (act === 'ds-off')   return switchBackend('auto');
+    if (act === 'ds-key')   return editDeepseekKey(ds);
+    if (act === 'ds-clear') return clearDeepseekKey();
   };
+}
+
+/** 填写 / 更换 DeepSeek Key（DPAPI 加密后存本机；环境变量优先）。 */
+async function editDeepseekKey(ds) {
+  const envName = (ds && ds.env) || 'DEEPSEEK_API_KEY';
+  const html = `
+    <p class="muted small">Key 会用 Windows DPAPI 加密后存到
+      <code>%APPDATA%\\BookDB\\settings.json</code>，只有当前 Windows 用户能解密；
+      <b>明文不会写进任何文件</b>。</p>
+    <p class="muted small">若同时设置了环境变量 <code>${esc(envName)}</code>，
+      环境变量<b>优先</b>于这里保存的值。</p>
+    <label class="muted small">API Key</label>
+    <input id="ds-key" type="password" autocomplete="off" spellcheck="false"
+           placeholder="sk-..." style="width:100%;margin:6px 0">
+    <p class="muted small" id="ds-key-err" style="color:var(--danger)"></p>`;
+
+  openModal('DeepSeek API Key', html, [
+    { label: '取消', onClick: closeModal },
+    { label: '加密保存', primary: true, onClick: async () => {
+        const key = $('#ds-key').value.trim();
+        if (!key) { $('#ds-key-err').textContent = '请输入 Key'; return; }
+        try {
+          await api('/api/llm/deepseek/key', { method: 'POST', body: { key } });
+          toast('已加密保存');
+        } catch (err) { $('#ds-key-err').textContent = err.message; return; }
+        openAiPanel();                // 刷新状态（显示掩码 / 来源）
+      } },
+  ]);
+}
+
+/** 清除 GUI 保存的 Key（不影响环境变量）。 */
+async function clearDeepseekKey() {
+  try {
+    await api('/api/llm/deepseek/key', { method: 'POST', body: { key: '' } });
+    toast('已清除本机保存的 Key');
+  } catch (err) { toast(err.message, true); return; }
+  openAiPanel();
+}
+
+/** 切换元数据提取后端（写回 book.toml 的 [vlm] backend）。 */
+async function switchBackend(backend) {
+  try {
+    const r = await api('/api/model/backend', { method: 'POST', body: { backend } });
+    toast(r.backend === 'deepseek'
+      ? '已切换到 DeepSeek（只处理 PDF 文字）'
+      : '已切回本地视觉模型');
+  } catch (err) { toast(err.message, true); return; }
+  openAiPanel();                      // 刷新状态
+}
+
+/** 用一次极小的请求验证 DeepSeek Key / 网络（会消耗少量 token）。 */
+async function testDeepseek() {
+  toast('正在测试 DeepSeek 连接…');
+  try {
+    const r = await api('/api/llm/deepseek/test', { method: 'POST' });
+    toast(`DeepSeek 连接正常（${r.model}）`);
+  } catch (err) { toast(err.message, true); }
 }
 
 async function selectModel(key) {

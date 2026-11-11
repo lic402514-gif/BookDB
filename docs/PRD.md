@@ -890,6 +890,23 @@ http://127.0.0.1:11434/api/chat  （本地 Ollama 服务）
 - 模型不可用（服务未启动 / 模型未拉取）时，`book enrich` 给出明确提示并退出，不影响其余功能；
 - 模型仅被 `enrich` 调用，CRUD、检索、导入导出等**完全不触碰模型**。
 
+### 云端文本后端（可选，2026-11 增补）
+
+本地优先仍是默认；但「**有文本层**的 PDF」不必让 VLM 读图。为此增加 **DeepSeek**
+纯文本后端（`[vlm] backend = "deepseek"`），接入点是统一适配层的 `chat_text()`：
+
+- **只发送文字**：PDF 文本层前 8 页、截断 12000 字；**不上传图片**，不做 OCR；
+- **Key 明文不落盘**：GUI 填写的 Key 经 **Windows DPAPI** 加密后存入
+  `%APPDATA%\BookDB\settings.json`（仅当前 Windows 用户可解密）；
+  环境变量 `DEEPSEEK_API_KEY` 优先于它；两者都**绝不**写进 `book.toml`；
+- `auto` **永不静默上云** —— 必须显式选择 `deepseek`；
+- 扫描件（无文本层）明确报 `NoTextLayer`，提示改用本地视觉模型（不静默回退）；
+- `--text` / `--vision` 可对单本强制覆盖取料方式；
+- 模型名 / 端点写在 `[vlm] deepseek_model` / `deepseek_endpoint`，不硬编码。
+
+这是对 §19「不采用 DeepSeek API」的**显式例外**：默认关闭、用户开启、
+只发文字 —— 「数据默认不离开本机」的定位不变。
+
 ------
 
 # 14. PDF 文件重命名
@@ -1286,7 +1303,7 @@ GUI ──────────┘
 - Meilisearch；
 - MinerU（视觉转文本由 VLM 自身完成，见第 13 节）；
 - Tavily；
-- DeepSeek API；
+- DeepSeek API（**已作为可选文本后端接入**，见 §13「云端文本后端」：默认关闭、只发文字、Key 只读环境变量）；
 - 在线书目 API；
 - 云端数据库；
 - 多用户权限系统。
@@ -1673,6 +1690,8 @@ llama.cpp 官方 release 提供 **Windows 预编译二进制**（CPU 版解压�
 - 阅读器；
 - 独立 Web 服务。
 - 用云 API（OpenAI / Gemini 等）做 AI 提取 —— 与「本地优先」定位冲突，暂不考虑。
+  （**2026-11 增补**：DeepSeek 文本后端已作为**显式可选**接入，见 §13；
+  仍不接视觉类云 API，默认也不启用任何云端调用。）
 
 其中：
 

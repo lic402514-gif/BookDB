@@ -651,6 +651,14 @@ def enrich(
         False, "--no-overwrite", help="批量：只填补空缺字段，不覆盖已有值"
     ),
     page: int = typer.Option(None, "--page", help="手动指定 PDF 页码（1-based）"),
+    text: bool = typer.Option(
+        False, "--text",
+        help="强制走 PDF 文本层（不发图；适合 DeepSeek 等文本模型）",
+    ),
+    vision: bool = typer.Option(
+        False, "--vision",
+        help="强制渲染成图交给视觉模型（扫描件用；默认已按配置自动选择）",
+    ),
     yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认"),
 ) -> None:
     """从版权页提取元数据（PRD §12）。
@@ -658,6 +666,10 @@ def enrich(
     单本：`--pdf` 或 `--image`。
     批量：`--missing`（全库缺元数据的记录）或 `--dir <目录>`（限定某目录内的记录）。
     模型输出须人工确认后才写入数据库（§12.5）。
+
+    取料方式默认按 `book.toml` 的 `[vlm] backend` 自动选择：
+    `deepseek` 走文字流程（只发文字、不发图），其余走视觉流程。
+    `--text` / `--vision` 可对单本强制覆盖。
     """
     single = pdf is not None or image is not None
     batch = missing or directory is not None
@@ -676,6 +688,18 @@ def enrich(
     if page is not None and not pdf:
         err_console.print("[red]--page 只能与 --pdf 一起使用。[/red]")
         raise typer.Exit(code=1)
+    if text and image:
+        err_console.print("[red]--text 只能与 --pdf 一起使用（图片本来就没有文本层）。[/red]")
+        raise typer.Exit(code=1)
+    if text and vision:
+        err_console.print("[red]--text 与 --vision 不能同时使用。[/red]")
+        raise typer.Exit(code=1)
+    if (text or vision) and batch:
+        err_console.print(
+            "[red]--text / --vision 只用于单本模式。[/red]"
+            "批量模式的取料方式由 book.toml 的 [vlm] backend 决定。"
+        )
+        raise typer.Exit(code=1)
 
     if batch:
         _enrich_batch(ctx, directory, limit=limit, yes=yes, overwrite=not no_overwrite)
@@ -689,15 +713,21 @@ def enrich(
     with _open(ctx) as octx:
         try:
             result = (
-                enrich_service.enrich_from_pdf(octx.config, pdf, page)
+                enrich_service.enrich_from_pdf(
+                    octx.config, pdf, page,
+                    mode="text" if text else "vision" if vision else None,
+                )
                 if pdf
                 else enrich_service.enrich_from_image(octx.config, image)
             )
         except ModelUnavailableError as exc:
             err_console.print(
-                f"[yellow]本地模型不可用：[/yellow]\n{exc}\n"
+                f"[yellow]模型不可用：[/yellow]\n{exc}\n"
                 "[dim]（模型仅被 enrich 使用，其余功能不受影响）[/dim]"
             )
+            raise typer.Exit(code=1)
+        except enrich_service.NoTextLayer as exc:
+            err_console.print(f"[yellow]{exc}[/yellow]")
             raise typer.Exit(code=1)
         except enrich_service.CopyrightPageNotFound as exc:
             err_console.print(f"[yellow]{exc}[/yellow]")

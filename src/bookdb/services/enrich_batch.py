@@ -24,7 +24,11 @@ from pathlib import Path
 from .. import paths as paths_mod
 from ..db import dao
 from ..services.context import Context
-from ..services.enrich import CopyrightPageNotFound, enrich_from_pdf
+from ..services.enrich import (
+    CopyrightPageNotFound,
+    NoTextLayer,
+    enrich_from_pdf,
+)
 from ..services.llm import ModelUnavailableError
 
 #: 判定「值得跑 VLM 补全」的字段。
@@ -188,7 +192,7 @@ def run_item(ctx: Context, item: BatchItem) -> BatchItem:
         return item
     try:
         result = enrich_from_pdf(ctx.config, item.pdf)
-    except (CopyrightPageNotFound, ModelUnavailableError) as exc:
+    except (CopyrightPageNotFound, NoTextLayer, ModelUnavailableError) as exc:
         item.error = str(exc)
     except (ValueError, RuntimeError) as exc:            # noqa: BLE001
         item.error = f"{type(exc).__name__}: {exc}"

@@ -85,7 +85,12 @@ NO_LIBRARY_PATHS = frozenset({
     "/api/model/cancel",
     "/api/model/remove",
     "/api/model/dir",
+    "/api/llm/deepseek/test",
+    "/api/llm/deepseek/key",
 })
+
+#: 元数据提取可选后端（与 `config.VlmConfig.backend` 保持一致）
+ALLOWED_BACKENDS = ("auto", "builtin", "ollama", "deepseek")
 
 
 class ApiError(Exception):
@@ -615,36 +620,151 @@ def _h_model_list(config, match, query, body) -> dict:
     }
 
 
+def _mask_key(key: str | None) -> str:
+    """只露出 Key 的头尾，供界面确认「存的是哪一把」，绝不回传完整 Key。"""
+    if not key:
+        return ""
+    if len(key) <= 10:
+        return "已配置"
+    return f"{key[:5]}…{key[-4:]}"
+
+
 def _h_model_status(config, match, query, body) -> dict:
-    """当前实际会使用哪个后端（内置 / Ollama / 都不可用）。
+    """当前实际会使用哪个后端（内置 / Ollama / DeepSeek / 都不可用）。
 
     ⚠️ 必须容忍 `config is None`（尚未打开 Library 时的欢迎页状态）——
     模型是应用级资源，无库时也要能查看/下载。
+
+    DeepSeek 的 Key 只报「是否已配置 / 来源 / 掩码」，**不发起任何网络请求**，
+    也**不回传完整 Key**（环境变量或 GUI 保存的 DPAPI 密文都只读用途）。
     """
     from ..config import VlmConfig
+    from ..gui import secret as secret_store
+    from ..gui import settings as gui_settings
     from ..llm.adapters import llamacpp
+    from ..llm.adapters.deepseek import ENV_API_KEY
     from ..llm.base import ModelUnavailableError
     from ..services import llm as llm_svc
 
     vlm = config.vlm if config is not None else VlmConfig()
+    key, source = llm_svc.deepseek_key_info()
+    try:
+        stored = gui_settings.Settings.load().has_deepseek_key
+    except Exception:  # noqa: BLE001 - 设置不可读时不影响状态展示
+        stored = False
+
     out = {
         "backend": vlm.backend,
         "builtin_model": vlm.builtin_model,
         "binary_ready": llamacpp.is_available(),
         "ollama_endpoint": vlm.endpoint,
         "ollama_reachable": llm_svc._ollama_reachable(vlm.endpoint),
+        "deepseek": {
+            "configured": bool(key),
+            "source": source,               # env / file / none
+            "masked": _mask_key(key),
+            "stored": stored,               # 有密文（可能因换账户解不开）
+            "storage": "dpapi" if secret_store.available() else "unsupported",
+            "endpoint": vlm.deepseek_endpoint,
+            "model": vlm.deepseek_model,
+            "env": ENV_API_KEY,
+        },
         "active": None,
         "hint": None,
         "no_library": config is None,
     }
     try:
-        adapter = llm_svc.get_adapter(vlm)
+        # probe=True：只问「会用哪个后端」，不启动 llama-server / 不发云端请求
+        adapter = llm_svc.get_adapter(vlm, probe=True)
     except ModelUnavailableError as exc:
         out["hint"] = str(exc)
     else:
         name = adapter.__class__.__name__
-        out["active"] = "builtin" if "Llama" in name else "ollama"
+        out["active"] = (
+            "builtin" if "Llama" in name
+            else "deepseek" if "DeepSeek" in name
+            else "ollama"
+        )
     return out
+
+
+def _h_model_backend(config, match, query, body) -> dict:
+    """切换元数据提取后端（写回 book.toml 的 [vlm].backend）。"""
+    value = str((body or {}).get("backend") or "").strip().lower()
+    if value not in ALLOWED_BACKENDS:
+        raise ApiError(f"未知后端：{value or '（空）'}", 400)
+
+    if config is None or config.config_path is None:
+        raise ApiError("当前 Library 缺少 book.toml，无法保存设置", 409)
+
+    config.vlm.backend = value
+    config.save()
+    return {"ok": True, "backend": value}
+
+
+def _h_deepseek_key_set(config, match, query, body) -> dict:
+    """保存 / 清除 GUI 填写的 DeepSeek Key（**DPAPI 加密后**才落盘）。
+
+    明文只存在于本次请求内存里；`settings.json` 中只有密文。
+    传空字符串 = 清除。环境变量始终优先于这里保存的值。
+    """
+    from ..gui import secret as secret_store
+    from ..gui import settings as gui_settings
+    from ..services import llm as llm_svc
+
+    value = str((body or {}).get("key") or "").strip()
+    if value and len(value) < 8:
+        raise ApiError("Key 看起来太短，请确认复制完整", 400)
+    if any(ch.isspace() for ch in value):
+        raise ApiError("Key 中间不能有空格或换行", 400)
+
+    state = gui_settings.Settings.load()
+    if value:
+        if not secret_store.available():
+            raise ApiError(
+                "当前系统不支持本机加密存储（仅 Windows），"
+                "请改用环境变量 DEEPSEEK_API_KEY",
+                400,
+            )
+        try:
+            state.set_deepseek_key(value)       # 加密后再写入
+        except (secret_store.SecretError, ValueError) as exc:
+            raise ApiError(f"无法保存 Key：{exc}", 400) from exc
+    else:
+        state.clear_deepseek_key()
+    state.save()
+
+    key, source = llm_svc.deepseek_key_info()
+    return {
+        "ok": True,
+        "configured": bool(key),
+        "source": source,                       # env / file / none
+        "masked": _mask_key(key),
+        "cleared": not value,
+    }
+
+
+def _h_deepseek_test(config, match, query, body) -> dict:
+    """验证 DeepSeek Key / 网络 / 模型名是否可用（一次极小的文本请求）。
+
+    ⚠️ 会真正调用云端接口（消耗几个 token），因此只在用户点「测试连接」时触发。
+    """
+    from ..config import VlmConfig
+    from ..llm.adapters.deepseek import DeepSeekAdapter
+    from ..llm.base import ModelUnavailableError
+    from ..services import llm as llm_svc
+
+    vlm = config.vlm if config is not None else VlmConfig()
+    try:
+        adapter = DeepSeekAdapter(
+            endpoint=vlm.deepseek_endpoint,
+            model=vlm.deepseek_model,
+            api_key=llm_svc.resolve_deepseek_key(),
+        )
+        reply = adapter.chat_text("请只回复两个字：可用", max_tokens=8)
+    except ModelUnavailableError as exc:
+        raise ApiError(str(exc), 400) from exc
+    return {"ok": True, "model": vlm.deepseek_model, "reply": reply.strip()[:50]}
 
 
 def _h_model_select(config, match, query, body) -> dict:
@@ -826,7 +946,9 @@ def _h_enrich(config: Config, match, query, body) -> dict:
         else:
             result = enrich_service.enrich_from_image(config, path)
     except ModelUnavailableError as exc:
-        raise ApiError(f"本地模型不可用：{exc}", 503) from exc
+        raise ApiError(f"模型不可用：{exc}", 503) from exc
+    except enrich_service.NoTextLayer as exc:
+        raise ApiError(str(exc), 422) from exc
     except enrich_service.CopyrightPageNotFound as exc:
         raise ApiError(str(exc), 422) from exc
     except (ValueError, RuntimeError) as exc:
@@ -1043,6 +1165,9 @@ ROUTES = [
     ("GET", r"^/api/model/dir$", _h_model_dir_get),
     ("POST", r"^/api/model/dir$", _h_model_dir_set),
     ("POST", r"^/api/model/dir/open$", _h_model_dir_open),
+    ("POST", r"^/api/model/backend$", _h_model_backend),
+    ("POST", r"^/api/llm/deepseek/test$", _h_deepseek_test),
+    ("POST", r"^/api/llm/deepseek/key$", _h_deepseek_key_set),
     ("GET", r"^/api/books$", _h_list),
     ("POST", r"^/api/books$", _h_add),
     ("GET", r"^/api/books/(?P<id>\d+)$", _h_get),

@@ -19,3 +19,6 @@ def _isolate_app_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("BOOKDB_SETTINGS_DIR", str(tmp_path / "bookdb-settings"))
     # 模型目录同样隔离（services/model.models_dir 会读 BOOKDB_MODELS_DIR）
     monkeypatch.setenv("BOOKDB_MODELS_DIR", str(tmp_path / "bookdb-models"))
+    # DeepSeek 的 Key 只认环境变量 —— 测试必须与开发机的真实 Key 隔离，
+    # 否则「未配置 Key」的分支在有人设了环境变量时会静默失效（还会真的发请求）。
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)

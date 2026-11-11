@@ -8,6 +8,9 @@
   Windows  %APPDATA%\\BookDB\\settings.json
   其他     $XDG_CONFIG_HOME/BookDB/settings.json（回退 ~/.config/...）
 
+另外：GUI 填写的 DeepSeek API Key 也在这里，但**只保存 DPAPI 密文**
+（见 `gui/secret.py`），明文不落盘；环境变量 `DEEPSEEK_API_KEY` 优先于它。
+
 容错原则：**设置文件损坏/半截时绝不抛异常** —— 直接当空设置（下次写入时重建）。
 理由：应用偏好丢了是小事，**程序起不来**才是大事。
 """
@@ -20,6 +23,8 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+
+from . import secret
 
 APP_DIR_NAME = "BookDB"
 SETTINGS_FILENAME = "settings.json"
@@ -108,6 +113,9 @@ class Settings:
     #: 模型存放目录。空 = 用 default_models_dir()（%LOCALAPPDATA%\BookDB\models）。
     #: 模型是 GB 级文件，允许用户改到空间充足的数据盘。
     models_dir: str = ""
+    #: GUI 填写的 DeepSeek API Key —— **只存 DPAPI 密文**（见 gui/secret.py），
+    #: 不存明文。环境变量 `DEEPSEEK_API_KEY` 优先于它。
+    deepseek_api_key: str = ""
     path: Path = field(default_factory=settings_path)
 
     # ------------------------------------------------------------------ load
@@ -125,6 +133,7 @@ class Settings:
         last = raw.get("last_library")
         recent_raw = raw.get("recent_libraries")
         models = raw.get("models_dir")
+        api_key = raw.get("deepseek_api_key")
         recent: list[RecentLibrary] = []
         if isinstance(recent_raw, list):
             for entry in recent_raw:
@@ -136,6 +145,7 @@ class Settings:
             last_library=Path(last) if isinstance(last, str) and last.strip() else None,
             recent=recent[:MAX_RECENT],
             models_dir=models.strip() if isinstance(models, str) else "",
+            deepseek_api_key=api_key.strip() if isinstance(api_key, str) else "",
             path=target,
         )
 
@@ -148,6 +158,8 @@ class Settings:
             "last_library": str(self.last_library) if self.last_library else None,
             "recent_libraries": [r.to_json() for r in self.recent[:MAX_RECENT]],
             "models_dir": self.models_dir or "",
+            # 只写 DPAPI 密文；明文 Key 永不落盘（见 gui/secret.py）
+            "deepseek_api_key": self.deepseek_api_key or "",
         }
         tmp = self.path.with_suffix(".json.tmp")
         tmp.write_text(
@@ -174,6 +186,33 @@ class Settings:
         self.recent = [r for r in self.recent if not _same_path(r.path, path)]
         if self.last_library and _same_path(self.last_library, path):
             self.last_library = None
+
+    # ------------------------------------------------------- DeepSeek Key
+    def set_deepseek_key(self, key: str) -> None:
+        """保存 GUI 输入的 Key（**DPAPI 加密后**存密文）；传空串 = 清除。"""
+        value = (key or "").strip()
+        if not value:
+            self.deepseek_api_key = ""
+            return
+        self.deepseek_api_key = secret.protect(value)
+
+    def clear_deepseek_key(self) -> None:
+        """清除已保存的 Key。"""
+        self.deepseek_api_key = ""
+
+    def deepseek_key(self) -> str | None:
+        """解出已保存的 Key；没有 / 密文损坏 / 换了 Windows 账户 → None。"""
+        if not self.deepseek_api_key:
+            return None
+        try:
+            return secret.unprotect(self.deepseek_api_key)
+        except (secret.SecretError, ValueError):
+            return None
+
+    @property
+    def has_deepseek_key(self) -> bool:
+        """是否存了密文（不等于一定能解密 —— 见 `deepseek_key()`）。"""
+        return bool(self.deepseek_api_key)
 
     @property
     def is_empty(self) -> bool:

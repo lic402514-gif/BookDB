@@ -82,22 +82,34 @@ def test_model_list_reports_binary_availability(api):
 def test_model_status_reports_active_backend(api, monkeypatch):
     from bookdb.services import llm as llm_service
 
-    monkeypatch.setattr(llm_service, "_builtin_adapter", lambda vlm: None)
+    monkeypatch.setattr(llm_service, "_builtin_adapter", lambda vlm, **kw: None)
     monkeypatch.setattr(llm_service, "_ollama_reachable", lambda ep: False)
     status, data = api.call("GET", "/api/model/status")
     assert status == 200
     assert data["active"] is None and data["hint"]
 
 
+def test_model_status_probes_without_starting_server(api, monkeypatch):
+    """⚠️ 回归：状态查询不得启动 llama-server（否则打开 AI 面板会卡几十秒）。"""
+    from bookdb.services import llm as llm_service
+
+    seen = {}
+
+    def fake_adapter(vlm, *, probe=False):
+        seen["probe"] = probe
+        raise llm_service.ModelUnavailableError("（测试）不可用")
+
+    monkeypatch.setattr(llm_service, "get_adapter", fake_adapter)
+    status, _data = api.call("GET", "/api/model/status")
+    assert status == 200 and seen["probe"] is True
+
+
 def test_model_status_reports_builtin(api, monkeypatch):
     from bookdb.services import llm as llm_service
 
-    class Fake:
-        __class__ = type("LlamaServerAdapter", (), {})
-
     monkeypatch.setattr(
         llm_service, "_builtin_adapter",
-        lambda vlm: type("LlamaServerAdapter", (), {})())
+        lambda vlm, **kw: type("LlamaServerAdapter", (), {})())
     _s, data = api.call("GET", "/api/model/status")
     assert data["active"] == "builtin"
 

@@ -1,7 +1,11 @@
-"""PDF 处理（PRD §12.2 / §12.3）—— 版权页定位与渲染。
+"""PDF 处理（PRD §12.2 / §12.3）—— 版权页定位、文本层读取与渲染。
 
 依赖 PyMuPDF（可选依赖 `.[pdf]`），未安装时给出明确提示。
 不使用 MinerU，不做 OCR 文本重建 —— 视觉转文本由 VLM 自身完成（§13）。
+
+两条输入路线都从这里取料：
+  · 扫描件 / 视觉后端：`render_page_png()` 渲染成图再喂 VLM；
+  · 有文本层的 PDF / 文本后端（如 DeepSeek）：`read_pages_text()` 直接取文字。
 """
 
 from __future__ import annotations
@@ -61,6 +65,31 @@ def locate_copyright_page(
             if score > best_score:
                 best_score, best_page = score, i + 1
         return best_page if best_score > 0 else None
+
+
+def read_page_text(path: str | Path, page: int) -> str:
+    """读第 page 页（1-based）的文本层；无文本层（扫描件）返回空字符串。"""
+    fitz = _fitz()
+    with fitz.open(str(path)) as doc:
+        if not 1 <= page <= len(doc):
+            raise ValueError(f"页码越界：{page}（共 {len(doc)} 页）")
+        return (doc[page - 1].get_text() or "").strip()
+
+
+def read_pages_text(path: str | Path, *, pages: int = SCAN_FIRST) -> list[tuple[int, str]]:
+    """读前 `pages` 页的文本层，返回 [(页号, 文字), …]。
+
+    **只返回有文字的页** —— 扫描件的页会得到空串，从而被自动跳过；
+    调用方据此判断「有没有文本层」。不在这里做截断，截断由业务层负责。
+    """
+    fitz = _fitz()
+    with fitz.open(str(path)) as doc:
+        out: list[tuple[int, str]] = []
+        for i in range(min(len(doc), pages)):
+            text = (doc[i].get_text() or "").strip()
+            if text:
+                out.append((i + 1, text))
+        return out
 
 
 def render_page_png(path: str | Path, page: int, *, dpi: int = 150) -> bytes:

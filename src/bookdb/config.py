@@ -8,6 +8,9 @@
   [vlm]
   endpoint = "http://127.0.0.1:11434"
   model    = "qwen2.5-vl:3b"
+  backend  = "auto"                 # auto / builtin / ollama / deepseek
+  deepseek_endpoint = "https://api.deepseek.com"
+  deepseek_model    = "deepseek-chat"
 
 配置查找顺序：
   1. 命令行 --config 显式指定
@@ -30,16 +33,20 @@ class VlmConfig:
     """本地 VLM 适配配置（PRD §13 / §17）。
 
     `backend`：
-      · `auto`    —— 内置 llama.cpp 就绪就用它，否则回退到已启动的 Ollama（默认）
-      · `builtin` —— 只用内置模型
-      · `ollama`  —— 只用 Ollama
+      · `auto`     —— 内置 llama.cpp 就绪就用它，否则回退到已启动的 Ollama（默认）
+      · `builtin`  —— 只用内置模型
+      · `ollama`   —— 只用 Ollama
+      · `deepseek` —— 只用 DeepSeek 云端**文本**模型（不读图；Key 走环境变量）
     `builtin_model` 为内置模型的 key（见 `services/model.CATALOG`）。
+    `deepseek_*` 只在 `backend = "deepseek"` 时生效，可指向任何 OpenAI 兼容端点。
     """
 
     endpoint: str = "http://127.0.0.1:11434"
     model: str = "qwen2.5vl:3b"
     backend: str = "auto"
     builtin_model: str = "3b"
+    deepseek_endpoint: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-chat"
 
 
 @dataclass
@@ -88,6 +95,10 @@ class Config:
             cfg.vlm.backend = str(vlm["backend"])
         if vlm.get("builtin_model"):
             cfg.vlm.builtin_model = str(vlm["builtin_model"])
+        if vlm.get("deepseek_endpoint"):
+            cfg.vlm.deepseek_endpoint = str(vlm["deepseek_endpoint"])
+        if vlm.get("deepseek_model"):
+            cfg.vlm.deepseek_model = str(vlm["deepseek_model"])
 
         return cfg
 
@@ -118,6 +129,8 @@ class Config:
             f'model = "{self.vlm.model}"',
             f'backend = "{self.vlm.backend}"',
             f'builtin_model = "{self.vlm.builtin_model}"',
+            f'deepseek_endpoint = "{self.vlm.deepseek_endpoint}"',
+            f'deepseek_model = "{self.vlm.deepseek_model}"',
             "",
         ]
         path.write_text("\n".join(lines), encoding="utf-8")
