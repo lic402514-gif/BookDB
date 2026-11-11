@@ -466,7 +466,9 @@ def test_enrich_batch_preview_lists_todo(api):
     assert plan["scope"] == "全库"
     todo = [i for i in plan["items"] if not i["skip"]]
     assert [i["id"] for i in todo] == [bare]
-    assert set(todo[0]["missing"]) == {"author", "publisher_name", "publication_year"}
+    assert set(todo[0]["missing"]) == {
+        "author", "publisher_name", "publication_year", "isbn"
+    }
 
 
 def test_enrich_batch_item_reports_errors(api):

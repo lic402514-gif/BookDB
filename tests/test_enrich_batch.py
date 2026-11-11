@@ -80,12 +80,23 @@ def test_needs_enrich_excludes_year():
     ) == []
 
 
+def test_needs_enrich_excludes_isbn_by_default():
+    """ISBN 默认**不**触发补全 —— 很多老书没有 ISBN，算缺失会无限重跑。"""
+    assert enrich_batch.needs_enrich(
+        {"author": "甲", "publisher_name": "社", "isbn": None}
+    ) == []
+    assert enrich_batch.needs_enrich(
+        {"author": "甲", "publisher_name": "社", "isbn": None}, include_isbn=True
+    ) == ["isbn"]
+
+
 def test_missing_fields_includes_year_for_display():
     assert enrich_batch.missing_fields({"title": "x"}) == [
-        "author", "publisher_name", "publication_year"
+        "author", "publisher_name", "publication_year", "isbn"
     ]
     assert enrich_batch.missing_fields(
-        {"author": "a", "publisher_name": "p", "publication_year": 2020}
+        {"author": "a", "publisher_name": "p", "publication_year": 2020,
+         "isbn": "9787100163180"}
     ) == []
 
 
@@ -101,6 +112,19 @@ def test_plan_skips_complete(ctx: Context):
     assert [i.title for i in plan.todo] == ["缺元数据"]      # 只处理缺元数据那条
     skipped = {i.title: i.skipped for i in plan.skipped}
     assert skipped == {"已齐全": "元数据已齐"}
+
+
+def test_plan_include_isbn(ctx: Context):
+    """显式「连 ISBN 一起补」时，缺 ISBN 的记录才进入待补。"""
+    _blank_pdf(ctx.config.library_root / "b.pdf")
+    book_service.add_book(ctx, {"title": "缺ISBN", "author": "甲", "publisher": "社",
+                                "file_path": "b.pdf"})
+    books = book_service.list_books(ctx)
+
+    assert enrich_batch.build_batch_plan(ctx, books=books).todo == []   # 默认不看 ISBN
+    plan = enrich_batch.build_batch_plan(ctx, books=books, include_isbn=True)
+    assert [i.title for i in plan.todo] == ["缺ISBN"]
+    assert "isbn" in plan.todo[0].missing
 
 
 def test_plan_reports_missing_file(ctx: Context):

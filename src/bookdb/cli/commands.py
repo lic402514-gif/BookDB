@@ -660,6 +660,10 @@ def enrich(
         help="强制渲染成图交给视觉模型（扫描件用；默认已按配置自动选择）",
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认"),
+    include_isbn: bool = typer.Option(
+        False, "--isbn",
+        help="批量：把「缺 ISBN」也算作待补（默认只按作者/出版社判断）",
+    ),
 ) -> None:
     """从版权页提取元数据（PRD §12）。
 
@@ -667,8 +671,11 @@ def enrich(
     批量：`--missing`（全库缺元数据的记录）或 `--dir <目录>`（限定某目录内的记录）。
     模型输出须人工确认后才写入数据库（§12.5）。
 
+    批量默认只把「缺作者或出版社」当作待补 —— 年份和 ISBN 很多书本来就没有，
+    默认算缺失会导致每次重跑（见 README「批量补全」）；要补 ISBN 加 `--isbn`。
+
     取料方式默认按 `book.toml` 的 `[vlm] backend` 自动选择：
-    `deepseek` 走文字流程（只发文字、不发图），其余走视觉流程。
+    `deepseek` 有文本层走文字、扫描件按 deepseek_vision 决定是否读图，其余走视觉流程。
     `--text` / `--vision` 可对单本强制覆盖。
     """
     single = pdf is not None or image is not None
@@ -702,7 +709,10 @@ def enrich(
         raise typer.Exit(code=1)
 
     if batch:
-        _enrich_batch(ctx, directory, limit=limit, yes=yes, overwrite=not no_overwrite)
+        _enrich_batch(
+            ctx, directory, limit=limit, yes=yes,
+            overwrite=not no_overwrite, include_isbn=include_isbn,
+        )
         return
 
     source = pdf or image
@@ -769,6 +779,7 @@ def _enrich_batch(
     limit: int | None,
     yes: bool,
     overwrite: bool,
+    include_isbn: bool = False,
 ) -> None:
     """批量跑 VLM 补全元数据：先逐条提取 → 表格复核 → 确认后写库。"""
     with _open(ctx) as octx:
@@ -781,7 +792,8 @@ def _enrich_batch(
 
         try:
             plan = enrich_batch.build_batch_plan(
-                octx, books=books, directory=directory, limit=limit
+                octx, books=books, directory=directory, limit=limit,
+                include_isbn=include_isbn,
             )
         except scan_service.DirectoryNotFoundError as exc:
             err_console.print(f"[red]{exc}[/red]")
@@ -790,6 +802,12 @@ def _enrich_batch(
         todo = plan.todo
         if not todo:
             console.print("[green]✓[/green] 没有需要补全的记录（都已有元数据或无法处理）。")
+            missing_isbn = sum(1 for b in books if not b.get("isbn"))
+            if missing_isbn and not include_isbn:
+                console.print(
+                    f"[dim]其中 {missing_isbn} 条缺 ISBN —— 默认不按 ISBN 触发；"
+                    "要连 ISBN 一起补：book enrich --missing --isbn[/dim]"
+                )
             _render_batch_summary(plan)
             return
 

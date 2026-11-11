@@ -40,8 +40,15 @@ from ..services.llm import ModelUnavailableError
 #: 前端「缺失字段」列仍会展示年份，供人工判断是否用 `--pdf` 单独补。
 KEY_FIELDS = ("author", "publisher_name")
 
-#: 缺这些就算「元数据不全」（含年份，仅用于**展示**给用户看，不用于触发重跑）。
-DISPLAY_FIELDS = ("author", "publisher_name", "publication_year")
+#: ISBN 默认**不作为**触发条件（见 README「批量补全」）：
+#: 有些老书/外文原版根本没有 ISBN，若默认算缺失 → 每次 `--missing` 都重跑同一批，
+#: 与「年份」是同一类无限重试问题。需要补 ISBN 时显式开启：
+#:   · GUI 勾选「连 ISBN 一起补」；
+#:   · CLI `book enrich --missing --isbn`。
+ISBN_FIELD = "isbn"
+
+#: 缺这些就算「元数据不全」（含年份/ISBN，仅用于**展示**给用户看，不用于触发重跑）。
+DISPLAY_FIELDS = ("author", "publisher_name", "publication_year", "isbn")
 
 #: 从文件名能可靠拿到的字段 —— 扫描建库已填，不算缺失。
 _ALREADY_FROM_FILENAME = ("title", "file_path")
@@ -95,9 +102,13 @@ def missing_fields(book: dict) -> list[str]:
     return [f for f in DISPLAY_FIELDS if not book.get(f)]
 
 
-def needs_enrich(book: dict) -> list[str]:
-    """列出触发补全的字段（不含年份 —— 见 `KEY_FIELDS` 的说明）。"""
-    return [f for f in KEY_FIELDS if not book.get(f)]
+def needs_enrich(book: dict, *, include_isbn: bool = False) -> list[str]:
+    """列出触发补全的字段（默认不含年份 / ISBN —— 见 `KEY_FIELDS` 的说明）。
+
+    `include_isbn=True` 时把 ISBN 也算作缺失条件（用户显式要求「连 ISBN 一起补」）。
+    """
+    fields = KEY_FIELDS + ((ISBN_FIELD,) if include_isbn else ())
+    return [f for f in fields if not book.get(f)]
 
 
 def _resolve(ctx: Context, stored: str | None) -> Path | None:
@@ -121,6 +132,7 @@ def build_batch_plan(
     directory: str | Path | None = None,
     limit: int | None = None,
     recursive: bool = True,
+    include_isbn: bool = False,
 ) -> BatchPlan:
     """构建批量补全计划（**不写库**）。
 
@@ -138,8 +150,8 @@ def build_batch_plan(
     for book in books:
         pdf = _resolve(ctx, book.get("file_path"))
         title = _record_title(book)
-        missing = needs_enrich(book)          # 触发条件（不含年份）
-        display = missing_fields(book)        # 展示用（含年份）
+        missing = needs_enrich(book, include_isbn=include_isbn)   # 触发条件（默认不含年份/ISBN）
+        display = missing_fields(book)        # 展示用（含年份/ISBN）
 
         if not missing:
             items.append(BatchItem(book["id"], title, book.get("file_path") or "",

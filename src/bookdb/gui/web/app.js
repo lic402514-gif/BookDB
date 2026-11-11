@@ -606,9 +606,14 @@ function doBatchEnrich(prefillDir = '') {
          <input id="be-rec" type="checkbox" checked> 递归子目录
        </label>
      </div>
+     <label class="small" style="display:flex;gap:6px;align-items:center;margin-top:10px">
+       <input id="be-isbn" type="checkbox"> 连 ISBN 一起补
+     </label>
      <p class="muted small" style="margin-top:10px">
-       逐条定位版权页并跑本地 VLM 补齐<b>作者 / 出版社 / 年份 / ISBN</b>。<br>
-       先列出待补清单，你确认后才开始；每条约 <b>6~15 秒</b>（3B 模型 CPU 推理），请耐心。<br>
+       逐条定位版权页并跑模型补齐<b>作者 / 出版社 / 年份 / ISBN</b>。<br>
+       默认只把「缺作者或出版社」当作待补 —— 年份和 ISBN 很多书本来就没有，
+       算作条件会导致每次重跑；要补 ISBN 请勾选上面。<br>
+       先列出待补清单，你确认后才开始；每条约 <b>6~15 秒</b>（本地 3B 模型 CPU 推理）。<br>
        提取结果会先在表格里复核，<b>勾选后才写入</b>库。
      </p>`,
     [{ label: '取消', onClick: closeModal },
@@ -629,23 +634,37 @@ function toggleBeDir() {
   if (wrap) wrap.classList.toggle('hidden', !useDir);
 }
 
-async function batchEnrichPreview() {
+async function batchEnrichPreview(forceIsbn = false) {
   const useDir = $('#be-scope') && $('#be-scope').value === 'dir';
   const directory = useDir ? ($('#be-dir') ? $('#be-dir').value.trim() : '') : '';
   if (useDir && !directory) { toast('请填写要处理的目录', true); return; }
   const recursive = $('#be-rec') ? $('#be-rec').checked : true;
+  const includeIsbn = forceIsbn || ($('#be-isbn') ? $('#be-isbn').checked : false);
 
   let plan;
   try {
     plan = await api('/api/enrich/batch/preview', {
-      method: 'POST', body: { directory, recursive } });
+      method: 'POST', body: { directory, recursive, include_isbn: includeIsbn } });
   } catch (err) { toast(err.message, true); return; }
 
   if (!plan.todo) {
+    const extra = [];
+    if (plan.isbn_missing) extra.push(`${plan.isbn_missing} 条缺 ISBN`);
+    if (plan.year_missing) extra.push(`${plan.year_missing} 条缺出版年`);
+    const hint = extra.length
+      ? `<p class="muted small">按住当前规则只按<b>作者 / 出版社</b>判断，所以它们算「已齐」；
+           其中 ${extra.join('、')}。年份与 ISBN 很多书本来就没有，算作补齐条件会导致每次重跑。</p>`
+      : '';
+    const btns = [{ label: '返回', onClick: () => doBatchEnrich(directory) }, { label: '关闭', onClick: closeModal }];
+    if (plan.isbn_missing) {
+      btns.splice(1, 0, { label: `连 ISBN 一起补（${plan.isbn_missing} 条）`,
+                          onClick: () => batchEnrichPreview(true) });
+    }
     openModal('无需补全',
-      `<p class="muted">${esc(plan.scope)}：共 ${plan.total} 条，<b>没有需要补全的记录</b>。</p>
+      `<p class="muted">${esc(plan.scope)}：共 ${plan.total} 条，
+         <b>没有缺作者/出版社的记录</b>。</p>${hint}
        ${plan.unresolved.length ? `<p class="muted small">另有 ${plan.unresolved.length} 个 PDF 未匹配到记录。</p>` : ''}`,
-      [{ label: '返回', onClick: () => doBatchEnrich(directory) }, { label: '关闭', onClick: closeModal }]);
+      btns);
     return;
   }
 

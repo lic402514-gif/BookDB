@@ -977,12 +977,14 @@ def _h_enrich_batch_preview(config: Config, match, query, body) -> dict:
     body = dict(body or {})
     directory = (body.get("directory") or "").strip() or None
     recursive = bool(body.get("recursive", True))
+    include_isbn = bool(body.get("include_isbn", False))
 
     with Context.open(config) as ctx:
         books = book_service.list_books(ctx)
         try:
             plan = enrich_batch.build_batch_plan(
-                ctx, books=books, directory=directory, recursive=recursive
+                ctx, books=books, directory=directory,
+                recursive=recursive, include_isbn=include_isbn,
             )
         except scan_service.DirectoryNotFoundError as exc:
             raise ApiError(str(exc), 400) from exc
@@ -991,6 +993,10 @@ def _h_enrich_batch_preview(config: Config, match, query, body) -> dict:
             "scope": directory or "全库",
             "total": len(plan.items),
             "todo": len(plan.todo),
+            "include_isbn": include_isbn,
+            # 给「无需补全」对话框用：让用户知道还差哪些、为什么没触发
+            "isbn_missing": sum(1 for i in plan.items if "isbn" in i.missing),
+            "year_missing": sum(1 for i in plan.items if "publication_year" in i.missing),
             "items": [
                 {
                     "id": i.book_id,
